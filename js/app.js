@@ -60,7 +60,7 @@ function download(name, text, type = 'application/json') {
 }
 
 /* ---------- ayarlar ---------- */
-const DEFAULT_SETTINGS = { provider: 'gemini', keys: {}, models: {}, modelLists: {}, customBase: 'http://localhost:1234/v1', temperature: 0.9, length: 'orta' };
+const DEFAULT_SETTINGS = { provider: 'gemini', keys: {}, models: {}, modelLists: {}, customBase: 'http://localhost:1234/v1', temperature: 0.8, length: 'orta' };
 let settings = { ...DEFAULT_SETTINGS, ...store.get('settings', {}) };
 ['keys', 'models', 'modelLists'].forEach(k => settings[k] = settings[k] || {});
 const saveSettings = () => store.set('settings', settings);
@@ -104,7 +104,7 @@ function coverHTML(s) {
 }
 
 /* ---------- metin işleme ---------- */
-const TAG_CUT = /<\s*\/?\s*(durum|se[cç]enek)/i;
+const TAG_CUT = /<\s*\/?\s*(durum|se[cç]enek|defter)/i;
 function splitOutput(raw) {
   raw = raw || '';
   let stats = null, options = [];
@@ -135,18 +135,71 @@ function md(text) {
 }
 const cur = m => m.alts[m.ai] || '';
 
+/* ---------- hikaye defteri ---------- */
+// Yapay zeka her cevabın sonunda <defter> bloğuyla kalıcı hafızayı günceller.
+// Defter, mesajlardan yeniden hesaplanır: yeniden yazma, geri alma ve sürüm değiştirme kendiliğinden tutarlı kalır.
+function parseDefter(raw) {
+  const m = (raw || '').match(/<defter>([\s\S]*?)(<\/defter>|$)/i);
+  if (!m) return [];
+  const ops = [];
+  m[1].split('\n').forEach(line => {
+    const l = line.trim().replace(/^[-*•]\s+(?=[+!?~x])/i, '');
+    let r;
+    if ((r = l.match(/^([+!?])\s*(.{3,})$/))) ops.push({ op: r[1], text: r[2].replace(/^\[?\d+\]\s*/, '').trim().slice(0, 240) });
+    else if ((r = l.match(/^x\s*\[?(\d+)\]?/i))) ops.push({ op: 'x', id: +r[1] });
+    else if ((r = l.match(/^~\s*\[?(\d+)\]?\s*[|:]\s*(.{3,})$/))) ops.push({ op: '~', id: +r[1], text: r[2].trim().slice(0, 240) });
+  });
+  return ops;
+}
+function ledgerOf(save, upto) {
+  const items = new Map();
+  let next = 1;
+  const msgs = save.messages.slice(0, upto ?? save.messages.length);
+  msgs.forEach((m, i) => {
+    if (m.role !== 'model') return;
+    parseDefter(cur(m)).forEach(o => {
+      if (o.op === 'x') items.delete(o.id);
+      else if (o.op === '~') { const it = items.get(o.id); if (it) it.text = o.text; }
+      else items.set(next, { id: next++, type: o.op === '+' ? 'fact' : o.op === '!' ? 'sonuc' : 'soru', text: o.text, turn: i });
+    });
+  });
+  return [...items.values()];
+}
+function ledgerText(items) {
+  if (!items.length) return '';
+  const part = (type, cap) => items.filter(x => x.type === type).slice(-cap).map(x => `[${x.id}] ${x.text}`).join('\n');
+  const f = part('fact', 90), s = part('sonuc', 40), q = part('soru', 30);
+  return [f && `Gerçekler:\n${f}`, s && `Bekleyen sonuçlar (zamanı gelince hikayede tetikle):\n${s}`, q && `Açık meseleler:\n${q}`].filter(Boolean).join('\n\n');
+}
+
 /* ---------- yapay zeka talimatı ---------- */
-const BASE_RULES = `Sen "Diyar" adlı interaktif bir hikaye oyununun anlatıcısı ve oyun yöneticisisin. Oyuncuyla birlikte, onun kararlarıyla şekillenen bir hikaye yazıyorsun.
+const BASE_RULES = `Sen "Diyar" adlı interaktif bir hikaye oyununun anlatıcısı ve oyun yöneticisisin. Oyuncuyla birlikte, onun kararlarıyla şekillenen tutarlı, uzun soluklu bir hikaye yazıyorsun. İyi bir oyun yöneticisi gibi davran: dünyayı gerçek kıl, oyuncuyu kayırma, söylediğini unutma.
 
-Temel kurallar:
-- Her zaman akıcı, doğal ve edebi bir Türkçe kullan. Özel isimleri (Winterfell, Forks, Hogwarts vb.) orijinal halleriyle yaz.
-- Oyuncunun karakterinin ne düşündüğünü, ne söylediğini ya da ne yaptığını onun yerine yazma ve onun adına karar verme. Dünyanın, diğer karakterlerin ve olayların tepkisini anlat, sonra sırayı oyuncuya bırak.
-- Yan karakterlerin kendi istekleri, sırları ve kişilikleri var. Her şeyi oyuncunun istediği gibi kabul etmezler; ikna edilmeleri, kandırılmaları ya da zorlanmaları gerekebilir.
-- Dünya tutarlı olsun: kurulan gerçekleri, isimleri ve ilişkileri unutma. Kararların kalıcı sonuçları olsun. Başarısızlık, kayıp ve sürpriz mümkün; oyuncuyu sürekli kazandırma, ama haksızca da cezalandırma.
-- Duyusal ayrıntılar, diyaloglar ve gerilim kullan. Diyalogları tırnak içinde yaz. Kendini tekrar etme, hikayeyi her cevapta ilerlet.
-- Oyuncu "(OOC: ...)" biçiminde yazarsa hikayenin dışına çık ve kısaca oyun yöneticisi olarak cevap ver.
+## Süreklilik (en önemli kural)
+- "Hikaye defteri", "hikaye özeti" ve "oyuncunun notları" kesin gerçektir. Onlarla ASLA çelişme. Bir karakterin adı, yaşı, kişiliği, yarası, sahip olduğu eşya, bulunduğu yer, kime ne söz verdiği ve kimin neyi bildiği tutarlı kalmalı.
+- Karakterler yalnızca kendi gördüklerini ve kendilerine söylenenleri bilir. Oyuncu bir sırrı bir kişiye söylediyse sadece o kişi bilir. Duyumlar ancak makul bir yoldan yayılır.
+- Zaman akar. Gün, mevsim, yara iyileşmesi, yolculuk süresi, erzak tüketimi gerçekçi olsun. Önceki sahnede olan hiçbir şey sebepsizce yok sayılmasın.
+- Hikayenin ana çizgisinden ve tonundan sapma. Senaryonun türüne, dünyasına ve kurallarına sadık kal; oyuncu saçma bir şey denerse dünya buna kendi kurallarıyla tepki versin (komikleşip dağılmasın).
 
-İçerik sınırları:
+## Neden-sonuç
+- Önemli her oyuncu eylemi iki sonuç doğurur: hemen görünen bir sonuç ve zamanla ortaya çıkan bir sonuç (bir düşmanın intikamı, bir borcun gelip dayanması, bir yalanın ortaya çıkması, bir dostluğun karşılık bulması, bir yaranın enfeksiyonu).
+- Gecikmeli sonuçları hikaye defterine "!" ile yaz (ne olacak ve ne zaman). Zamanı geldiğinde, kimse hatırlatmadan hikayede gerçekleştir. Defterdeki bekleyen sonuçları her cevapta gözden geçir.
+- Başarı emek ister; ücretsiz öğle yemeği yok. Güçlü bir hamle bedel getirir, kötü bir hamle bir yol da açabilir. Oyuncuyu ne sürekli kazandır ne de haksızca cezalandır.
+- Dünya oyuncudan bağımsız işler. Her cevapta arka planda bir şey ilerlesin (bir söylenti, bir ordunun hareketi, bir karakterin kendi planı). Oyuncu hiçbir şey yapmasa bile hikaye durmaz.
+
+## Karakterler
+- Yan karakterlerin kendi istekleri, korkuları, sırları ve ayırt edici bir konuşma biçimi var. Oyuncunun her dediğini kabul etmezler; ikna, pazarlık, baskı ya da kanıt gerekir. Yalan söyleyebilir, saklayabilir, yanılabilirler.
+- Kanondan gelen karakterler kendi kişiliklerinden çıkmaz. Kanonda bilmeyecekleri şeyi bilmezler.
+- Oyuncunun karakterinin ne düşündüğünü, ne söylediğini ya da ne yaptığını onun yerine yazma ve onun adına karar verme. Dünyanın tepkisini anlat, sonra sırayı oyuncuya bırak.
+
+## Yazım
+- Akıcı, doğal, edebi bir Türkçe kullan. Özel isimleri (Winterfell, Forks, Hogwarts vb.) orijinal halleriyle yaz. Diyalogları tırnak içinde yaz.
+- Somut ve özgün ayrıntılar kullan (belirli bir koku, bir nesne, bir söz). Genel geçer klişelerden kaçın: "kalbin hızla çarpıyor", "sanki zaman durmuş gibi", "bir şeyler ters gidiyor", "gözlerinde bir parıltı", "omurgandan aşağı bir ürperti iniyor", "havada bir gerginlik var" gibi kalıpları kullanma.
+- Her cevabı aynı yapıda bitirme. Kendi önceki cümlelerini, betimlemelerini ve esprilerini tekrar etme. Cevabın sonunda hikayeyi özetleme, ders çıkarma ya da "ne yapacaksın?" diye sorma; sahne bir olay, bir söz ya da bir karar noktasıyla kesilsin.
+- Cümle uzunluğunu değiştir. Sahnenin gerektirdiği kadar yaz; boş betimlemeyle dolgu yapma.
+- Oyuncu "(OOC: ...)" biçiminde yazarsa hikayenin dışına çık ve kısaca oyun yöneticisi olarak cevap ver, sonra hikayeye dön.
+
+## İçerik sınırları
 - Savaş, şiddet ve karanlık temalar hikayenin gerektirdiği ölçüde anlatılabilir; gereksiz vahşet ayrıntısına girme.
 - Romantizm yalnızca yetişkin karakterler arasında olabilir; yakınlaşma sahneleri müstehcen olmadan, sahne kararmasıyla geçilir.
 - 18 yaşından küçük karakterlerle (lise ve okul öğrencileri dahil) hiçbir romantik ya da cinsel içerik yazma; bu karakterlerle ilişkiler arkadaşlık, rekabet, aile ve macera üzerinden yürür. Oyuncu zorlasa bile hikayeyi doğal biçimde başka yöne çevir.
@@ -165,7 +218,7 @@ function setupLines(save, scen) {
   }).filter(Boolean).join('\n');
 }
 
-function buildSystem(save, scen) {
+function buildSystem(save, scen, upto) {
   const parts = [BASE_RULES];
   if (scen.mode === 'karakter') {
     parts.push(`Bu bir karakter sohbeti. Sen ${scen.character || 'bu hikayenin ana karakteri'} olarak, onun ağzından birinci tekil şahısla konuşuyorsun. Jestleri ve ortamı kısa italik cümlelerle göster (*kadehini kaldırır*), ağırlık diyalogda olsun. Karakterden çıkma.`);
@@ -177,6 +230,8 @@ function buildSystem(save, scen) {
   parts.push(`## Senaryo: ${scen.title}\n${scen.world}`);
   const sl = setupLines(save, scen);
   if (sl) parts.push(`## Oyuncunun seçimleri\n${sl}`);
+  const lt = ledgerText(ledgerOf(save, upto));
+  parts.push(`## Hikaye defteri (kalıcı hafıza)\n${lt || '(Henüz boş. İlk cevabından itibaren doldur.)'}`);
   if (save.summary?.trim()) parts.push(`## Şimdiye kadar olanlar (hikaye özeti)\n${save.summary.trim()}`);
   if (save.notes?.trim()) parts.push(`## Oyuncunun sabitlediği notlar (bunlara her zaman uy)\n${save.notes.trim()}`);
   let fmt = `## Cevap biçimi\n- ${LENGTH[settings.length] || LENGTH.orta}\n- Hikaye metnini düz yaz; vurgu için **kalın** ve *italik* kullanabilirsin. Başlık ve madde listesi kullanma.`;
@@ -185,6 +240,7 @@ function buildSystem(save, scen) {
     fmt += `\n- Hikaye metninden sonra güncel durumu tek satır JSON olarak ver: <durum>{...}</durum>. Anahtarlar: ${keys}. Değerleri hikayedeki olaylara göre gerçekçi biçimde güncelle; listeleri virgülle ayrılmış kısa metin olarak yaz.`;
   }
   fmt += `\n- En sonda oyuncunun yapabileceği 3 kısa ve birbirinden farklı eylem öner (her biri en fazla 12 kelime):\n<secenekler>\n- ...\n- ...\n- ...\n</secenekler>`;
+  fmt += `\n- Her cevabın en sonuna hikaye defterini güncelleyen kısa bir blok ekle. Her satır tek bir şeydir ve şunlardan biriyle başlar:\n  + metin : ileride önem taşıyacak yeni bir gerçek (tanışılan karakter ve ilişkisi, verilen söz, borç, yara, bulunan eşya, alınan karar, öğrenilen sır, ölüm, yer ve zaman)\n  ! metin : oyuncunun eyleminin ya da dünyadaki bir gelişmenin gecikmeli sonucu, ne olacağı ve yaklaşık ne zaman olacağıyla (ör. "! Yenilen komutan 2 hafta içinde intikam için baskın düzenleyecek")\n  ? metin : çözülmemiş bir gizem, görev ya da soru\n  x numara : defterdeki bir maddenin artık geçersiz ya da gerçekleşmiş olması (ör. "x 7")\n  ~ numara | yeni metin : bir maddeyi güncelle\n  Sadece değişenleri yaz (en fazla 5 satır), kısa tut, tekrar etme. Zamanı gelip hikayede gerçekleşen "!" maddelerini "x" ile kapat. Blok oyuncuya gösterilmez.\n<defter>\n+ ...\n</defter>`;
   parts.push(fmt);
   return parts.join('\n\n');
 }
@@ -205,7 +261,7 @@ function buildHistory(save, scen, uptoIdx) {
   msgs.forEach((m, i) => {
     let text;
     if (m.role === 'model') {
-      text = cur(m).replace(/<se[cç]enekler>[\s\S]*?(<\/se[cç]enekler>|$)/gi, '');
+      text = cur(m).replace(/<se[cç]enekler>[\s\S]*?(<\/se[cç]enekler>|$)/gi, '').replace(/<defter>[\s\S]*?(<\/defter>|$)/gi, '');
       if (i !== lastModel) text = text.replace(/<durum>[\s\S]*?<\/durum>/gi, '');
       text = text.trim();
     } else {
@@ -216,6 +272,8 @@ function buildHistory(save, scen, uptoIdx) {
     const last = h[h.length - 1];
     if (last.role === role) last.text += '\n\n' + text; else h.push({ role, text });
   });
+  const lastH = h[h.length - 1];
+  if (lastH.role === 'user') lastH.text += '\n\n[Anlatıcı notu, oyuncuya gösterilmez: Cevap yazmadan önce hikaye defterindeki gerçekleri ve bekleyen sonuçları kontrol et; zamanı gelmiş olanı tetikle. Oyuncu adına konuşma ya da karar verme. Önceki cevaplarındaki kalıpları ve betimlemeleri tekrar etme. Cevabın sonunda sırasıyla <durum>, <secenekler> ve <defter> bloklarını ver.]';
   return h;
 }
 
@@ -564,6 +622,18 @@ function statsHTML() {
   return `<section class="pbox"><h3>Durum</h3>${rows}</section>`;
 }
 
+function ledgerHTML() {
+  const items = ledgerOf(P.save);
+  const grp = (type, title) => {
+    const l = items.filter(x => x.type === type);
+    return l.length ? `<h4>${title}</h4><ul class="ledger">${l.map(x => `<li>${esc(x.text)}</li>`).join('')}</ul>` : '';
+  };
+  const body = grp('sonuc', 'Bekleyen sonuçlar') + grp('soru', 'Açık meseleler') + grp('fact', 'Hatırlananlar');
+  return `<section class="pbox"><details><summary>Hikaye defteri (${items.length})</summary>
+    <p class="hint">Yapay zekanın hikayeden aklında tuttuğu önemli şeyler. Yanlış hatırladığı bir şey varsa aşağıdaki Hafıza notlarına doğrusunu yaz, notlar defterden önceliklidir.</p>
+    ${body || '<p class="hint">Hikaye ilerledikçe dolacak.</p>'}</details></section>`;
+}
+
 function renderPanel() {
   const el = $('#panel'); if (!el) return;
   const { save, scen } = P;
@@ -576,8 +646,9 @@ function renderPanel() {
       <p class="hint">Yapay zekanın asla unutmamasını istediğin şeyler. Örneğin: "Kardeşimin adı Aras. Sol kolum yaralı."</p>
       <textarea data-field="notes" rows="4" placeholder="Not ekle">${esc(save.notes)}</textarea>
     </section>
+    ${ledgerHTML()}
     <section class="pbox">
-      <details ${save.summary ? '' : ''}>
+      <details>
         <summary>Hikaye özeti${P.summarizing ? ' <em>(güncelleniyor)</em>' : ''}</summary>
         <p class="hint">Uzun oyunlarda eski olaylar buraya otomatik özetlenir, böylece yapay zeka yüzlerce mesaj sonra bile hikayeyi hatırlar. İstersen düzeltebilirsin.</p>
         <textarea data-field="summary" rows="8" placeholder="Henüz özet yok. Hikaye uzadıkça kendiliğinden dolacak.">${esc(save.summary)}</textarea>
@@ -605,6 +676,15 @@ function sendUser(text, cont = false) {
   generate('new');
 }
 
+async function nextModel(tried) {
+  const p = settings.provider;
+  let list = settings.modelLists[p];
+  if (!list?.length) {
+    try { list = await listModels(settings); settings.modelLists[p] = list; } catch { return null; }
+  }
+  return rankModels(p, list).find(id => !tried.has(id)) || null;
+}
+
 async function generate(kind = 'new') {
   if (!P || P.busy) return;
   const { save, scen } = P;
@@ -628,39 +708,63 @@ async function generate(kind = 'new') {
   node.innerHTML = '<p class="loading">Yazıyor</p>';
   scrollStory(true);
 
-  const system = buildSystem(save, scen);
+  const system = buildSystem(save, scen, idx);
   const history = buildHistory(save, scen, idx);
-  P.ctrl = new AbortController();
-  const ctrl = P.ctrl;
-  let raw = '', pending = false, error = null, timedOut = false;
-  const started = Date.now();
-  let lastChunk = started;
-  // Bekçi: hiç cevap gelmezse ya da akış takılırsa durdur
-  const FIRST_LIMIT = 90, STALL_LIMIT = 45;
-  const watch = setInterval(() => {
-    const now = Date.now();
-    if (!raw) {
-      const sec = Math.round((now - started) / 1000);
-      if (P === me && sec >= 8) node.innerHTML = `<p class="loading">Yazıyor (${sec} sn)</p>`;
-      if (sec >= FIRST_LIMIT) { timedOut = true; ctrl.abort(); }
-    } else if (now - lastChunk > STALL_LIMIT * 1000) { timedOut = true; ctrl.abort(); }
-  }, 1000);
-  try {
-    for await (const chunk of streamChat({ settings, system, history, signal: ctrl.signal })) {
-      lastChunk = Date.now();
-      raw += chunk; m.alts[m.ai] = raw;
-      if (!pending) {
-        pending = true;
-        requestAnimationFrame(() => { pending = false; if (P !== me) return; node.innerHTML = md(splitOutput(raw).visible) + '<span class="caret" aria-hidden="true"></span>'; scrollStory(); });
+  const prov = settings.provider;
+  const original = settings.models[prov];
+  const tried = new Set();
+  const FIRST_LIMIT = 35, STALL_LIMIT = 40, MAX_TRIES = 5;
+  const NO_RETRY = ['anahtar', 'anahtar-yok', 'ag', 'filtre'];
+  let raw = '', pending = false, error = null, timedOut = false, stopped = false;
+  while (true) {
+    tried.add(settings.models[prov]);
+    const ctrl = new AbortController();
+    P.ctrl = ctrl;
+    timedOut = false; error = null;
+    const started = Date.now();
+    let lastChunk = started;
+    const label = settings.models[prov];
+    const watch = setInterval(() => {
+      const now = Date.now();
+      if (!raw) {
+        const sec = Math.round((now - started) / 1000);
+        if (P === me && sec >= 6) node.innerHTML = `<p class="loading">Yazıyor (${sec} sn)</p>`;
+        if (sec >= FIRST_LIMIT) { timedOut = true; ctrl.abort(); }
+      } else if (now - lastChunk > STALL_LIMIT * 1000) { timedOut = true; ctrl.abort(); }
+    }, 1000);
+    try {
+      for await (const chunk of streamChat({ settings, system, history, signal: ctrl.signal })) {
+        lastChunk = Date.now();
+        raw += chunk; m.alts[m.ai] = raw;
+        if (!pending) {
+          pending = true;
+          requestAnimationFrame(() => { pending = false; if (P !== me) return; node.innerHTML = md(splitOutput(raw).visible) + '<span class="caret" aria-hidden="true"></span>'; scrollStory(); });
+        }
       }
+    } catch (e) {
+      if (e.name !== 'AbortError') error = e;
     }
-  } catch (e) {
-    if (e.name !== 'AbortError') error = e;
+    clearInterval(watch);
+    if (ctrl.signal.aborted && !timedOut) { stopped = true; break; }   // oyuncu durdurdu
+    if (!error && !timedOut) break;                                       // başarılı
+    if (raw.trim()) break;                                                // yarım cevap var, model değiştirme
+    if (error && NO_RETRY.includes(error.kind)) break;
+    if (tried.size >= MAX_TRIES || P !== me) break;
+    const next = await nextModel(tried);
+    if (!next || P !== me) break;
+    settings.models[prov] = next;
+    node.innerHTML = `<p class="loading">${esc(label)} yanıt vermedi, ${esc(next)} deneniyor</p>`;
   }
-  clearInterval(watch);
-  if (timedOut) error = { kind: 'model', message: raw
-    ? 'Cevap yarıda takıldı. "Tekrar dene"ye bas.'
-    : `Yapay zeka ${FIRST_LIMIT} saniyedir cevap vermedi. Seçili model (${settings.models[settings.provider]}) yavaş ya da ücretsiz katmanda sıkışık olabilir. Ayarlar'dan başka bir model seç (örneğin gemini-2.5-flash) ve tekrar dene.` };
+  if (!error && !timedOut && !stopped && raw.trim() && settings.models[prov] !== original) saveSettings();   // çalışan modeli hatırla
+  else if (settings.models[prov] !== original && (error || timedOut || !raw.trim())) settings.models[prov] = original;
+  if (timedOut || (error && tried.size > 1)) {
+    const lastMsg_ = error?.message;
+    error = { kind: tried.size > 1 ? 'model' : (error?.kind || 'model'), message: raw
+      ? 'Cevap yarıda takıldı. "Tekrar dene"ye bas.'
+      : (tried.size > 1
+        ? `Denenen ${tried.size} modelin hiçbiri cevap vermedi. Ücretsiz katman şu an çok yoğun olabilir. Bir dakika sonra tekrar dene ya da Ayarlar'dan Groq anahtarı ekle (hızlı ve ücretsiz).${lastMsg_ ? ' Son hata: ' + lastMsg_ : ''}`
+        : `Yapay zeka ${FIRST_LIMIT} saniyedir cevap vermedi. "Çalışan modeli bul"a bas.`) };
+  }
   me.busy = false; me.ctrl = null;
   if (!raw.trim()) {
     if (kind === 'regen') { m.alts.pop(); m.ai = Math.max(0, m.alts.length - 1); }
@@ -674,11 +778,12 @@ async function generate(kind = 'new') {
   if (!error) maybeSummarize();
 }
 
-const KEEP = 24, TRIGGER = 56;
+const lim = () => settings.provider === 'gemini' ? { KEEP: 36, TRIGGER: 90 } : { KEEP: 14, TRIGGER: 36 };
 async function maybeSummarize() {
   const me = P; if (!me || me.summarizing) return;
   const { save, scen } = me;
   const start = save.sumUpTo || 0;
+  const { KEEP, TRIGGER } = lim();
   if (save.messages.length - start < TRIGGER) return;
   const upto = save.messages.length - KEEP;
   const chunk = save.messages.slice(start, upto).map(m => m.role === 'user'

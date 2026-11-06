@@ -10,7 +10,7 @@ export const PROVIDERS = {
   },
   groq: {
     label: 'Groq',
-    note: 'Ücretsiz ve çok hızlı. Gemini limiti dolunca yedek olarak iyi.',
+    note: 'Ücretsiz ve çok hızlı, cevap hemen gelir. Gemini yoğunsa en kolay çıkış yolu bu.',
     keyUrl: 'https://console.groq.com/keys',
     steps: ['console.groq.com adresinde ücretsiz hesap aç.', '"API Keys" bölümünden yeni anahtar oluştur.', 'Anahtarı aşağıya yapıştır.'],
     base: 'https://api.groq.com/openai/v1',
@@ -42,7 +42,8 @@ function baseUrl(s) {
 function thinkingFor(model) {
   const m = model.toLowerCase();
   if (/gemma/.test(m)) return null;
-  if (/gemini-2\.5-(flash|flash-lite)/.test(m)) return { thinkingBudget: 0 };
+  if (/gemini-2\.5-flash-lite/.test(m)) return { thinkingBudget: 0 };
+  if (/gemini-2\.5-flash/.test(m)) return { thinkingBudget: 300 };
   if (/gemini-2\.5-pro/.test(m)) return { thinkingBudget: 128 };
   if (/gemini-(3|4|5|flash-latest|flash-lite-latest|pro-latest)/.test(m)) return { thinkingLevel: 'low' };
   return null;
@@ -148,6 +149,8 @@ export async function* streamChat({ settings, system, history, signal, temperatu
   }
 
   // OpenAI uyumlu servisler (Groq, OpenRouter, özel)
+  // Groq'un ücretsiz katmanı dakikada az jeton kabul ediyor: ilk mesaj + son mesajları gönder, gerisi özette.
+  if (s.provider === 'groq' && history.length > 16) history = [history[0], ...history.slice(-14).filter((m, i) => !(i === 0 && m.role === 'user' && history[0].role === 'user'))];
   const messages = [{ role: 'system', content: system }, ...history.map(m => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.text }))];
   const headers = { 'Content-Type': 'application/json' };
   if (k) headers['Authorization'] = 'Bearer ' + k;
