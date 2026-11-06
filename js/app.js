@@ -1,6 +1,6 @@
 import { SCENARIOS, CATEGORIES, SHELVES } from './scenarios.js';
 import { coverSVG, THEMES } from './covers.js';
-import { PROVIDERS, streamChat, complete, listModels, pickDefaultModel } from './ai.js';
+import { PROVIDERS, AIError, streamChat, complete, listModels, pickDefaultModel, rankModels } from './ai.js';
 
 /* ---------- yardımcılar ---------- */
 const app = document.getElementById('app');
@@ -503,7 +503,7 @@ function renderStory(jump) {
     html += msgHTML(m, i, i === lastIdx && !P.busy);
   });
   if (P.error) {
-    html += `<div class="err" role="alert"><p>${esc(P.error.message)}</p><div class="row"><button class="btn primary" data-act="retry">Tekrar dene</button>${/anahtar|model/.test(P.error.kind) ? '<button class="btn" data-act="settings">Ayarları aç</button>' : ''}</div></div>`;
+    html += `<div class="err" role="alert"><p>${esc(P.error.message)}</p><div class="row"><button class="btn primary" data-act="retry">Tekrar dene</button>${P.error.kind === 'model' ? '<button class="btn" data-act="fix-model">Çalışan modeli bul</button>' : ''}${/anahtar|model/.test(P.error.kind) ? '<button class="btn" data-act="settings">Ayarları aç</button>' : ''}</div></div>`;
   }
   if (!msgs.length && P.busy) html += `<div class="msg model"><div class="msg-body"><p class="loading">Dünya kuruluyor</p></div></div>`;
   el.innerHTML = html;
@@ -750,7 +750,8 @@ function openSettings(msg = '') {
       <label class="field"><span>Model</span>
         <div class="row"><select data-s="model">${opts.length ? opts.map(o => `<option value="${esc(o.id)}" ${o.id === model ? 'selected' : ''}>${esc(o.id)}</option>`).join('') : '<option value="">Önce listeyi getir</option>'}</select><button class="btn sm" data-act="fetch-models" type="button">Listeyi getir</button></div>
       </label>
-      <div class="row test-row"><button class="btn" data-act="test-ai" type="button">Bağlantıyı dene</button><span class="test-out" id="test-out" role="status"></span></div>
+      <div class="row test-row"><button class="btn primary" data-act="test-ai" type="button">Bağlantıyı dene</button><button class="btn" data-act="auto-model" type="button">Çalışan modeli otomatik bul</button></div>
+      <p class="test-out" id="test-out" role="status"></p>
       <p class="hint">Anahtarın sadece bu tarayıcıda saklanır, hiçbir sunucuya kaydedilmez.</p>
     </section>
     <section class="m-sec">
@@ -798,15 +799,60 @@ async function fetchModels(quiet) {
   }
 }
 
-async function testAI() {
+const PING = [{ role: 'user', text: 'Sadece "Bağlantı tamam" yaz.' }];
+
+/** Listedeki modelleri sırayla dener, cevap veren ilkini seçer */
+async function autoPickModel(onTry) {
+  const p = settings.provider;
+  const list = await listModels(settings);
+  settings.modelLists[p] = list;
+  const ranked = rankModels(p, list).slice(0, 8);
+  if (!ranked.length) throw new AIError('Hesabında kullanılabilir bir model bulunamadı. Anahtarın doğru mu?', 'model');
+  const prev = settings.models[p];
+  let limited = null, lastErr = null;
+  for (const id of ranked) {
+    onTry?.(id);
+    settings.models[p] = id;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
+    try {
+      const t = await complete({ settings, system: 'Çok kısa cevap ver.', history: PING, signal: ctrl.signal });
+      clearTimeout(timer);
+      if (t.trim()) { saveSettings(); return { id, text: t.trim() }; }
+    } catch (e) {
+      clearTimeout(timer);
+      lastErr = e;
+      if (e.kind === 'anahtar' || e.kind === 'anahtar-yok' || e.kind === 'ag') { settings.models[p] = prev; throw e; }
+      if (e.kind === 'limit' && !limited) limited = id;
+    }
+  }
+  if (limited) { settings.models[p] = limited; saveSettings(); return { id: limited, text: '(kullanım limiti dolu, biraz bekleyince çalışır)', limited: true }; }
+  settings.models[p] = prev;
+  throw lastErr || new AIError('Hiçbir model cevap vermedi.', 'model');
+}
+
+async function testAI(forceAuto) {
   const out = $('#test-out');
   out.textContent = 'Deneniyor…'; out.className = 'test-out';
+  const show = (msg, cls) => { out.textContent = msg; out.className = 'test-out ' + cls; };
+  const refreshSelect = () => {
+    const sel = $('[data-s="model"]'), p = settings.provider;
+    if (sel) sel.innerHTML = (settings.modelLists[p] || []).map(o => `<option value="${esc(o.id)}" ${o.id === settings.models[p] ? 'selected' : ''}>${esc(o.id)}</option>`).join('');
+  };
   try {
-    if (!(await ensureModel())) throw new Error('Model seçilemedi.');
-    const t = await complete({ settings, system: 'Çok kısa cevap ver.', history: [{ role: 'user', text: 'Sadece "Bağlantı tamam" yaz.' }] });
-    out.textContent = `Çalışıyor (${settings.models[settings.provider]}): ${t.trim().slice(0, 60)}`;
-    out.className = 'test-out ok';
-  } catch (e) { out.textContent = e.message; out.className = 'test-out bad'; }
+    if (!forceAuto && settings.models[settings.provider]) {
+      try {
+        const t = await complete({ settings, system: 'Çok kısa cevap ver.', history: PING, signal: AbortSignal.timeout(25000) });
+        return show(`Çalışıyor (${settings.models[settings.provider]}): ${t.trim().slice(0, 60)}`, 'ok');
+      } catch (e) {
+        if (!['model', 'bos', 'genel', 'sunucu'].includes(e.kind) && e.name !== 'TimeoutError' && e.name !== 'AbortError') throw e;
+        show('Bu model cevap vermedi, çalışan bir model aranıyor…', '');
+      }
+    }
+    const r = await autoPickModel(id => show(`Deneniyor: ${id}`, ''));
+    refreshSelect();
+    show(r.limited ? `Model seçildi: ${r.id}. Ücretsiz limit şu an dolu, biraz bekle.` : `Çalışıyor. Model otomatik seçildi: ${r.id}`, r.limited ? 'bad' : 'ok');
+  } catch (e) { show(e.message, 'bad'); }
 }
 
 function exportBackup() {
@@ -950,6 +996,13 @@ document.addEventListener('click', e => {
     case 'toggle-key': { const inp = $('[data-s="key"]'); inp.type = inp.type === 'password' ? 'text' : 'password'; b.textContent = inp.type === 'password' ? 'Göster' : 'Gizle'; break; }
     case 'fetch-models': fetchModels(); break;
     case 'test-ai': testAI(); break;
+    case 'auto-model': testAI(true); break;
+    case 'fix-model':
+      if (!P || P.busy) break;
+      b.disabled = true; b.textContent = 'Model aranıyor…';
+      autoPickModel().then(r => { toast(`Model seçildi: ${r.id}`); P.error = null; generate(lastMsg()?.role === 'model' ? 'regen' : 'new'); })
+        .catch(err => { b.disabled = false; b.textContent = 'Çalışan modeli bul'; toast(err.message); });
+      break;
     case 'export': exportBackup(); break;
     case 'wipe':
       if (confirm('Bütün oyunların, senaryoların ve ayarların silinecek. Bu geri alınamaz. Emin misin?')) {

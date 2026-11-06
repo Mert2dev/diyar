@@ -200,6 +200,26 @@ export async function listModels(s) {
   return list.sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/** Denenecek modelleri en uygundan en az uygun olana sıralar */
+export function rankModels(provider, list) {
+  const ids = list.map(m => m.id);
+  const num = (a, b) => b.localeCompare(a, 'en', { numeric: true });
+  if (provider === 'gemini') {
+    const tier = id => {
+      if (/^gemini-[\d.]+-flash$/.test(id)) return 0;
+      if (/gemini.*flash/.test(id) && !/lite|preview|exp|thinking/.test(id)) return 1;
+      if (/flash-lite/.test(id)) return 2;
+      if (/flash/.test(id)) return 3;
+      if (/gemini/.test(id) && !/pro/.test(id)) return 4;
+      if (/gemma/.test(id)) return 5;
+      return 6;
+    };
+    return [...ids].sort((a, b) => tier(a) - tier(b) || num(a, b));
+  }
+  const first = pickDefaultModel(provider, list);
+  return [first, ...ids.filter(id => id !== first)].filter(Boolean);
+}
+
 /** Listeden makul bir varsayılan model seçer */
 export function pickDefaultModel(provider, list) {
   const ids = list.map(m => m.id);
