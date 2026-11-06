@@ -631,9 +631,23 @@ async function generate(kind = 'new') {
   const system = buildSystem(save, scen);
   const history = buildHistory(save, scen, idx);
   P.ctrl = new AbortController();
-  let raw = '', pending = false, error = null;
+  const ctrl = P.ctrl;
+  let raw = '', pending = false, error = null, timedOut = false;
+  const started = Date.now();
+  let lastChunk = started;
+  // Bekçi: hiç cevap gelmezse ya da akış takılırsa durdur
+  const FIRST_LIMIT = 90, STALL_LIMIT = 45;
+  const watch = setInterval(() => {
+    const now = Date.now();
+    if (!raw) {
+      const sec = Math.round((now - started) / 1000);
+      if (P === me && sec >= 8) node.innerHTML = `<p class="loading">Yazıyor (${sec} sn)</p>`;
+      if (sec >= FIRST_LIMIT) { timedOut = true; ctrl.abort(); }
+    } else if (now - lastChunk > STALL_LIMIT * 1000) { timedOut = true; ctrl.abort(); }
+  }, 1000);
   try {
-    for await (const chunk of streamChat({ settings, system, history, signal: P.ctrl.signal })) {
+    for await (const chunk of streamChat({ settings, system, history, signal: ctrl.signal })) {
+      lastChunk = Date.now();
       raw += chunk; m.alts[m.ai] = raw;
       if (!pending) {
         pending = true;
@@ -643,6 +657,10 @@ async function generate(kind = 'new') {
   } catch (e) {
     if (e.name !== 'AbortError') error = e;
   }
+  clearInterval(watch);
+  if (timedOut) error = { kind: 'model', message: raw
+    ? 'Cevap yarıda takıldı. "Tekrar dene"ye bas.'
+    : `Yapay zeka ${FIRST_LIMIT} saniyedir cevap vermedi. Seçili model (${settings.models[settings.provider]}) yavaş ya da ücretsiz katmanda sıkışık olabilir. Ayarlar'dan başka bir model seç (örneğin gemini-2.5-flash) ve tekrar dene.` };
   me.busy = false; me.ctrl = null;
   if (!raw.trim()) {
     if (kind === 'regen') { m.alts.pop(); m.ai = Math.max(0, m.alts.length - 1); }

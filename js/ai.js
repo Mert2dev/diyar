@@ -39,6 +39,14 @@ function baseUrl(s) {
   if (s.provider === 'custom') return (s.customBase || '').replace(/\/+$/, '');
   return PROVIDERS[s.provider].base;
 }
+function thinkingFor(model) {
+  const m = model.toLowerCase();
+  if (/gemma/.test(m)) return null;
+  if (/gemini-2\.5-(flash|flash-lite)/.test(m)) return { thinkingBudget: 0 };
+  if (/gemini-2\.5-pro/.test(m)) return { thinkingBudget: 128 };
+  if (/gemini-(3|4|5|flash-latest|flash-lite-latest|pro-latest)/.test(m)) return { thinkingLevel: 'low' };
+  return null;
+}
 function key(s) { return (s.keys && s.keys[s.provider] || '').trim(); }
 
 async function friendlyError(res, model) {
@@ -110,8 +118,16 @@ export async function* streamChat({ settings, system, history, signal, temperatu
     } else {
       body.systemInstruction = { parts: [{ text: system }] };
     }
+    // Düşünen modellerde düşünmeyi kısıyoruz; yoksa ilk kelime çok geç gelebiliyor.
+    const thinking = thinkingFor(model);
+    if (thinking) body.generationConfig.thinkingConfig = thinking;
     const url = `${baseUrl(s)}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(k)}`;
-    const res = await doFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+    let res = await doFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+    if (!res.ok && res.status === 400 && thinking) {
+      // Model bu ayarı desteklemiyorsa ayarsız tekrar dene
+      delete body.generationConfig.thinkingConfig;
+      res = await doFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+    }
     if (!res.ok) throw await friendlyError(res, model);
     let got = false, finish = '';
     for await (const data of readSSE(res, signal)) {
@@ -188,9 +204,9 @@ export async function listModels(s) {
 export function pickDefaultModel(provider, list) {
   const ids = list.map(m => m.id);
   if (provider === 'gemini') {
-    if (ids.includes('gemini-flash-latest')) return 'gemini-flash-latest';
     const flash = ids.filter(id => /^gemini-[\d.]+-flash$/.test(id));
     if (flash.length) return flash.sort((a, b) => b.localeCompare(a, 'en', { numeric: true }))[0];
+    if (ids.includes('gemini-flash-latest')) return 'gemini-flash-latest';
     const anyFlash = ids.filter(id => /flash/.test(id) && !/lite|preview|exp/.test(id));
     if (anyFlash.length) return anyFlash.sort((a, b) => b.localeCompare(a, 'en', { numeric: true }))[0];
     return ids.find(id => /gemini/.test(id)) || ids[0] || '';
