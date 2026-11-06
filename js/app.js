@@ -1,5 +1,6 @@
 import { SCENARIOS, CATEGORIES, SHELVES } from './scenarios.js';
 import { coverSVG, THEMES } from './covers.js';
+import { SceneStage, SCENE_STYLES } from './scenes.js';
 import { PROVIDERS, AIError, streamChat, complete, listModels, pickDefaultModel, rankModels } from './ai.js';
 
 /* ---------- yardımcılar ---------- */
@@ -60,7 +61,7 @@ function download(name, text, type = 'application/json') {
 }
 
 /* ---------- ayarlar ---------- */
-const DEFAULT_SETTINGS = { provider: 'gemini', keys: {}, models: {}, modelLists: {}, customBase: 'http://localhost:1234/v1', temperature: 0.8, length: 'orta' };
+const DEFAULT_SETTINGS = { provider: 'gemini', keys: {}, models: {}, modelLists: {}, customBase: 'http://localhost:1234/v1', temperature: 0.8, length: 'orta', images: true, imgStyle: 'sinematik' };
 let settings = { ...DEFAULT_SETTINGS, ...store.get('settings', {}) };
 ['keys', 'models', 'modelLists'].forEach(k => settings[k] = settings[k] || {});
 const saveSettings = () => store.set('settings', settings);
@@ -134,6 +135,22 @@ function md(text) {
   return t.split(/\n{2,}/).map(p => p.trim()).filter(Boolean).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
 }
 const cur = m => m.alts[m.ai] || '';
+const stripScenes = t => (t || '').replace(/<sahne>[\s\S]*?<\/sahne>\s*/gi, '').replace(/<sahne>[\s\S]*$/i, '').replace(/<\/?sahne>/gi, '');
+/** Hikaye metnini paragraflara böler; <sahne> tarifi olan paragrafa data-scene ekler */
+function storyHTML(text) {
+  let carry = null, out = '';
+  (text || '').split(/\n{2,}/).forEach(par => {
+    let scene = null;
+    par = par.replace(/<sahne>([\s\S]*?)<\/sahne>/gi, (_, x) => { scene = scene || x.trim(); return ''; });
+    par = par.replace(/<sahne>[\s\S]*$/i, '').replace(/<\/?sahne>/gi, '').trim();
+    scene = scene || carry;
+    if (!par) { carry = scene; return; }
+    carry = null;
+    const html = md(par);
+    out += scene ? html.replace('<p>', `<p data-scene="${esc(scene)}">`) : html;
+  });
+  return out;
+}
 
 /* ---------- hikaye defteri ---------- */
 // Yapay zeka her cevabın sonunda <defter> bloğuyla kalıcı hafızayı günceller.
@@ -241,6 +258,9 @@ function buildSystem(save, scen, upto) {
   }
   fmt += `\n- En sonda oyuncunun yapabileceği 3 kısa ve birbirinden farklı eylem öner (her biri en fazla 12 kelime):\n<secenekler>\n- ...\n- ...\n- ...\n</secenekler>`;
   fmt += `\n- Her cevabın en sonuna hikaye defterini güncelleyen kısa bir blok ekle. Her satır tek bir şeydir ve şunlardan biriyle başlar:\n  + metin : ileride önem taşıyacak yeni bir gerçek (tanışılan karakter ve ilişkisi, verilen söz, borç, yara, bulunan eşya, alınan karar, öğrenilen sır, ölüm, yer ve zaman)\n  ! metin : oyuncunun eyleminin ya da dünyadaki bir gelişmenin gecikmeli sonucu, ne olacağı ve yaklaşık ne zaman olacağıyla (ör. "! Yenilen komutan 2 hafta içinde intikam için baskın düzenleyecek")\n  ? metin : çözülmemiş bir gizem, görev ya da soru\n  x numara : defterdeki bir maddenin artık geçersiz ya da gerçekleşmiş olması (ör. "x 7")\n  ~ numara | yeni metin : bir maddeyi güncelle\n  Sadece değişenleri yaz (en fazla 5 satır), kısa tut, tekrar etme. Zamanı gelip hikayede gerçekleşen "!" maddelerini "x" ile kapat. Blok oyuncuya gösterilmez.\n<defter>\n+ ...\n</defter>`;
+  if (settings.images) {
+    fmt += `\n- Görsel sahneler: Oyuncunun ekranının arka planında, anlattığın sahneye göre görsel üretiliyor. Yeni bir mekâna geçildiğinde ya da sahnede önemli bir görsel değişiklik olduğunda, o paragrafın EN BAŞINA İngilizce kısa bir görsel tarifi koy: <sahne>...</sahne>. İlk paragrafa mutlaka bir tane koy; cevap başına en fazla 3 tane. Tarif 15-35 kelime olsun: mekân, zaman, ışık, hava, renkler, önemli nesneler ve kamera açısı (wide shot, close-up, low angle). İnsanlar yalnızca isimsiz figürler olarak geçsin (uzaktan, arkadan ya da silüet; yüzleri seçilmesin). Tarifte ASLA karakter, film, dizi, kitap, oyun, marka, ünlü ya da gerçek kişi adı yazma. Çıplaklık, kan ve vahşet yok. Örnek: <sahne>wide shot of a rain-soaked small-town high school hallway, green lockers, fluorescent light, wet footprints on the floor, grey daylight through tall windows</sahne>`;
+  }
   parts.push(fmt);
   return parts.join('\n\n');
 }
@@ -262,6 +282,7 @@ function buildHistory(save, scen, uptoIdx) {
     let text;
     if (m.role === 'model') {
       text = cur(m).replace(/<se[cç]enekler>[\s\S]*?(<\/se[cç]enekler>|$)/gi, '').replace(/<defter>[\s\S]*?(<\/defter>|$)/gi, '');
+      text = stripScenes(text);
       if (i !== lastModel) text = text.replace(/<durum>[\s\S]*?<\/durum>/gi, '');
       text = text.trim();
     } else {
@@ -273,7 +294,7 @@ function buildHistory(save, scen, uptoIdx) {
     if (last.role === role) last.text += '\n\n' + text; else h.push({ role, text });
   });
   const lastH = h[h.length - 1];
-  if (lastH.role === 'user') lastH.text += '\n\n[Anlatıcı notu, oyuncuya gösterilmez: Cevap yazmadan önce hikaye defterindeki gerçekleri ve bekleyen sonuçları kontrol et; zamanı gelmiş olanı tetikle. Oyuncu adına konuşma ya da karar verme. Önceki cevaplarındaki kalıpları ve betimlemeleri tekrar etme. Cevabın sonunda sırasıyla <durum>, <secenekler> ve <defter> bloklarını ver.]';
+  if (lastH.role === 'user') lastH.text += '\n\n[Anlatıcı notu, oyuncuya gösterilmez: Cevap yazmadan önce hikaye defterindeki gerçekleri ve bekleyen sonuçları kontrol et; zamanı gelmiş olanı tetikle. Oyuncu adına konuşma ya da karar verme. Önceki cevaplarındaki kalıpları ve betimlemeleri tekrar etme. Cevabın sonunda sırasıyla <durum>, <secenekler> ve <defter> bloklarını ver.' + (settings.images ? ' Yeni mekân ya da görsel an olan paragrafların başına <sahne>İngilizce görsel tarifi</sahne> koy.' : '') + ']';
   return h;
 }
 
@@ -316,6 +337,7 @@ function route() {
 }
 function leavePlay() {
   if (P?.ctrl) P.ctrl.abort();
+  P?.scene?.destroy();
   P = null;
 }
 
@@ -498,7 +520,11 @@ function renderPlay(id) {
       <button class="icon-btn" data-act="toggle-panel" aria-label="Durum ve hafıza paneli" title="Durum ve hafıza">${I.panel}</button>
     </header>
     <div class="play-body">
-      <main class="story-wrap" id="story-wrap"><div class="story" id="story"></div></main>
+      <div class="stage">
+        <div class="scene-bg" id="scene-bg" aria-hidden="true" ${settings.images ? '' : 'hidden'}><div class="layer"></div><div class="layer"></div><div class="shade"></div></div>
+        <div class="scene-status" id="scene-status" hidden>Sahne görseli hazırlanıyor</div>
+        <main class="story-wrap" id="story-wrap"><div class="story" id="story"></div></main>
+      </div>
       <aside class="panel" id="panel" aria-label="Durum ve hafıza"></aside>
     </div>
     <footer class="composer">
@@ -524,6 +550,18 @@ function renderPlay(id) {
     input.value = ''; resize();
     sendUser(t);
   });
+  if (settings.images) {
+    P.scene = new SceneStage($('#scene-bg'), {
+      key: (settings.keys.pollinations || '').trim(), style: settings.imgStyle, seedBase: save.id,
+      onStatus: on => { const st = $('#scene-status'); if (st) st.hidden = !on; },
+    });
+    P.scene.setBase(coverHTML(scen));
+    let ticking = false;
+    $('#story-wrap').addEventListener('scroll', () => {
+      if (ticking) return; ticking = true;
+      requestAnimationFrame(() => { ticking = false; updateActiveScene(); });
+    }, { passive: true });
+  }
   renderStory(true);
   renderPanel();
   updateComposer();
@@ -540,7 +578,7 @@ function msgHTML(m, i, isLast) {
   }
   const { visible } = splitOutput(cur(m));
   const n = m.alts.length;
-  return `<div class="msg model" data-i="${i}"><div class="msg-body">${md(visible)}</div>
+  return `<div class="msg model" data-i="${i}"><div class="msg-body">${storyHTML(visible)}</div>
     <div class="msg-tools">
       ${n > 1 ? `<button class="icon-btn sm" data-act="alt" data-d="-1" data-i="${i}" aria-label="Önceki sürüm" ${m.ai === 0 ? 'disabled' : ''}>${I.left}</button><span class="alt-n">${m.ai + 1}/${n}</span><button class="icon-btn sm" data-act="alt" data-d="1" data-i="${i}" aria-label="Sonraki sürüm" ${m.ai === n - 1 ? 'disabled' : ''}>${I.right}</button>` : ''}
       ${isLast ? `<button class="icon-btn sm" data-act="regen" title="Yeniden yaz" aria-label="Yeniden yaz">${I.redo}</button>` : ''}
@@ -567,6 +605,19 @@ function renderStory(jump) {
   el.innerHTML = html;
   if (jump) scrollStory(true);
   renderOptions();
+  updateActiveScene();
+}
+
+/** Ekranın ortasına en yakın sahne paragrafının görselini arka plana getirir */
+function updateActiveScene() {
+  if (!P?.scene) return;
+  const w = $('#story-wrap'); if (!w) return;
+  const ps = $$('#story p[data-scene]');
+  if (!ps.length) return;
+  const limit = w.getBoundingClientRect().top + w.clientHeight * (P.busy ? 0.8 : 0.4);
+  let pick = ps[0];
+  for (const p of ps) { if (p.getBoundingClientRect().top < limit) pick = p; else break; }
+  P.scene.want(pick.dataset.scene);
 }
 
 function renderOptions() {
@@ -738,7 +789,7 @@ async function generate(kind = 'new') {
         raw += chunk; m.alts[m.ai] = raw;
         if (!pending) {
           pending = true;
-          requestAnimationFrame(() => { pending = false; if (P !== me) return; node.innerHTML = md(splitOutput(raw).visible) + '<span class="caret" aria-hidden="true"></span>'; scrollStory(); });
+          requestAnimationFrame(() => { pending = false; if (P !== me) return; node.innerHTML = storyHTML(splitOutput(raw).visible) + '<span class="caret" aria-hidden="true"></span>'; scrollStory(); if (P.scene) { $$('p[data-scene]', node).forEach(p => P.scene.prefetch(p.dataset.scene)); updateActiveScene(); } });
         }
       }
     } catch (e) {
@@ -788,7 +839,7 @@ async function maybeSummarize() {
   const upto = save.messages.length - KEEP;
   const chunk = save.messages.slice(start, upto).map(m => m.role === 'user'
     ? (m.cont ? '' : 'OYUNCU: ' + m.text)
-    : 'ANLATICI: ' + splitOutput(cur(m)).visible).filter(Boolean).join('\n\n');
+    : 'ANLATICI: ' + stripScenes(splitOutput(cur(m)).visible)).filter(Boolean).join('\n\n');
   me.summarizing = true; renderPanel();
   try {
     const text = await complete({
@@ -867,6 +918,16 @@ function openSettings(msg = '') {
       <p class="hint">Düşük değer tutarlı ve ciddi, yüksek değer sürprizli ve renkli anlatım verir.</p>
     </section>
     <section class="m-sec">
+      <h3>Sahne görselleri</h3>
+      <p class="hint">Hikaye yazılırken anlatılan yerin görseli ücretsiz olarak üretilir ve arka planda yumuşakça değişir. Görseller mekânı ve atmosferi gösterir; ünlü karakterleri ya da gerçek kişileri çizmez.</p>
+      <div class="seg" role="group" aria-label="Sahne görselleri">${[[true, 'Açık'], [false, 'Kapalı']].map(([k, l]) => `<button class="${!!settings.images === k ? 'on' : ''}" data-act="img-on" data-v="${k ? 1 : 0}">${l}</button>`).join('')}</div>
+      <span class="label" style="margin-top:12px">Görsel tarzı</span>
+      <div class="seg" role="group" aria-label="Görsel tarzı">${Object.entries(SCENE_STYLES).map(([k, v]) => `<button class="${settings.imgStyle === k ? 'on' : ''}" data-act="img-style" data-v="${k}">${v.label}</button>`).join('')}</div>
+      <label class="field" style="margin-top:12px"><span>Pollinations anahtarı (isteğe bağlı)</span><input type="password" data-s="pollkey" value="${esc(settings.keys.pollinations || '')}" autocomplete="off" spellcheck="false" placeholder="pk_ ile başlayan uygulama anahtarı"></label>
+      <p class="hint">Anahtarsız da çalışır, ama ücretsiz sınır yüzünden görsel en fazla 45 saniyede bir değişir ve köşede küçük bir logo olur. enter.pollinations.ai adresinden ücretsiz hesap açıp "pk_" ile başlayan bir anahtar alırsan görseller daha hızlı ve logosuz gelir.</p>
+      <a class="btn sm" href="https://enter.pollinations.ai" target="_blank" rel="noopener">Pollinations anahtar sayfası</a>
+    </section>
+    <section class="m-sec">
       <h3>Kayıtların</h3>
       <p class="hint">Oyunların ve senaryoların yalnızca bu tarayıcıda saklanır. Telefona ya da başka bir bilgisayara geçerken yedeği indir, orada yükle. Yedekte API anahtarın yer almaz.</p>
       <div class="row wrap"><button class="btn" data-act="export">Yedeği indir</button><label class="btn">Yedeği yükle<input type="file" accept=".json,application/json" id="import-file" hidden></label><button class="btn danger" data-act="wipe">Her şeyi sil</button></div>
@@ -881,6 +942,7 @@ function openSettings(msg = '') {
   }, 500));
   $('[data-s="model"]', m).addEventListener('change', e => { settings.models[settings.provider] = e.target.value; saveSettings(); });
   $('[data-s="temperature"]', m).addEventListener('input', e => { settings.temperature = +e.target.value; $('#temp-v').textContent = settings.temperature; saveSettings(); });
+  $('[data-s="pollkey"]', m).addEventListener('input', debounce(e => { settings.keys.pollinations = e.target.value.trim(); saveSettings(); }, 400));
   const cb = $('[data-s="customBase"]', m);
   if (cb) cb.addEventListener('input', debounce(e => { settings.customBase = e.target.value.trim(); saveSettings(); }, 400));
   $('#import-file', m).addEventListener('change', e => importBackup(e.target.files[0]));
@@ -1100,6 +1162,8 @@ document.addEventListener('click', e => {
     case 'len': settings.length = b.dataset.l; saveSettings(); $$('[data-act="len"]').forEach(x => x.classList.toggle('on', x === b)); break;
     case 'toggle-key': { const inp = $('[data-s="key"]'); inp.type = inp.type === 'password' ? 'text' : 'password'; b.textContent = inp.type === 'password' ? 'Göster' : 'Gizle'; break; }
     case 'fetch-models': fetchModels(); break;
+    case 'img-on': settings.images = b.dataset.v === '1'; saveSettings(); $$('[data-act="img-on"]').forEach(x => x.classList.toggle('on', x === b)); if (view === 'play') toast('Değişiklik oyunu yeniden açınca geçerli olur.'); break;
+    case 'img-style': settings.imgStyle = b.dataset.v; saveSettings(); $$('[data-act="img-style"]').forEach(x => x.classList.toggle('on', x === b)); break;
     case 'test-ai': testAI(); break;
     case 'auto-model': testAI(true); break;
     case 'fix-model':
@@ -1147,7 +1211,7 @@ document.addEventListener('click', e => {
     }
     case 'export-story': {
       const { save, scen } = P;
-      const txt = `${scen.title}\n${save.label}\n\n` + save.messages.map(m => m.role === 'user' ? (m.cont ? '' : `> ${m.text}`) : splitOutput(cur(m)).visible).filter(Boolean).join('\n\n');
+      const txt = `${scen.title}\n${save.label}\n\n` + save.messages.map(m => m.role === 'user' ? (m.cont ? '' : `> ${m.text}`) : stripScenes(splitOutput(cur(m)).visible)).filter(Boolean).join('\n\n');
       download(`${scen.title.replace(/[^\p{L}\p{N} ]/gu, '').trim() || 'hikaye'}.txt`, txt, 'text/plain;charset=utf-8');
       break;
     }

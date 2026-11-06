@@ -247,7 +247,32 @@ input[type=range] { width: 100%; accent-color: var(--amber); }
 .play-title strong { font-family: var(--serif); font-size: 1.12rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .play-title span { color: var(--muted); font-size: .88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .play-body { display: grid; grid-template-columns: 1fr; min-height: 0; min-width: 0; position: relative; overflow: hidden; }
-.story-wrap { overflow-y: auto; min-height: 0; scroll-behavior: auto; }
+.stage { position: relative; min-height: 0; min-width: 0; overflow: hidden; }
+.story-wrap { position: absolute; inset: 0; overflow-y: auto; z-index: 1; scroll-behavior: auto; }
+.scene-bg { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; background: var(--bg); }
+.scene-bg .layer {
+  position: absolute; inset: -3%; background-size: cover; background-position: center;
+  opacity: 0; transition: opacity 1.8s ease;
+}
+.scene-bg .layer svg { width: 100%; height: 100%; }
+.scene-bg .layer.on { opacity: 1; animation: drift 30s ease-out forwards; }
+@keyframes drift { from { transform: scale(1); } to { transform: scale(1.07); } }
+.scene-bg .shade {
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(90deg, rgba(25,27,41,.15) 0%, rgba(25,27,41,.6) 24%, rgba(25,27,41,.66) 50%, rgba(25,27,41,.6) 76%, rgba(25,27,41,.15) 100%),
+    linear-gradient(180deg, rgba(25,27,41,.35) 0%, rgba(25,27,41,.15) 40%, rgba(25,27,41,.8) 100%);
+}
+.scene-status {
+  position: absolute; top: 12px; right: 14px; z-index: 2; font-size: .82rem; color: #e9e1d1;
+  background: rgba(12,13,22,.65); backdrop-filter: blur(4px); padding: 4px 10px; border-radius: 999px;
+}
+.scene-status::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); margin-right: 7px; vertical-align: 1px; animation: blink 1.2s steps(2) infinite; }
+.msg.model .msg-body { text-shadow: 0 1px 3px rgba(10,11,18,.7); }
+.msg.user .msg-body { background: rgba(42,46,69,.88); }
+@media (max-width: 720px) {
+  .scene-bg .shade { background: linear-gradient(180deg, rgba(25,27,41,.55) 0%, rgba(25,27,41,.74) 45%, rgba(25,27,41,.9) 100%); }
+}
 .story { max-width: 740px; margin: 0 auto; padding: 28px 20px 40px; display: flex; flex-direction: column; gap: 22px; }
 .story-head { text-align: center; padding: 18px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .story-head h1 { font-family: var(--serif); font-size: clamp(1.6rem, 3.4vw, 2.3rem); margin: 0; line-height: 1.1; }
