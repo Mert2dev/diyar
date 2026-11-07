@@ -25,6 +25,21 @@ Anahtar yalnızca oynayan kişinin tarayıcısında saklanır; GitHub'a ya da ba
 
 Ücretsiz limit dolarsa (çok uzun oturumlarda olabilir) biraz beklemek, ayarlardan başka bir Gemini modeli seçmek ya da yedek olarak ücretsiz Groq anahtarı eklemek yeterli.
 
+## Görsel kalitesi
+
+Görseller anahtarsız da üretilir, ama servisin ücretsiz sınırı yüzünden 45 saniyede en fazla bir görsel gelir, köşede logo olur ve basit bir model kullanılır. Daha gerçekçi yüzler ve aynı karede iki karakter için **Ayarlar → Sahne görselleri** bölümüne https://enter.pollinations.ai adresinden alınan `pk_` ile başlayan anahtarı gir.
+
+Karakterlerin görünüşü oyundaki **Defter → Karakterler** bölümünde durur; beğenmediğini İngilizce olarak değiştirebilirsin.
+
+## Hafıza nasıl çalışır
+
+Yapay zeka hikayeyi dört katmanla hatırlar (`js/memory.js`):
+
+1. Son mesajlar birebir gönderilir; miktar, seçilen servisin kapasitesine göre ayarlanır.
+2. Eski olaylar otomatik özetlenir. Özet gecikirse kısaltılmış halleri gönderilir, hiçbir şey sessizce atılmaz.
+3. Hikaye defteri kalıcı gerçekleri tutar. Model defteri yazmayı atlarsa kısa bir ek istekle tamamlanır.
+4. Oyuncu eski bir şeyden bahsederse o sahne birebir geri getirilir.
+
 ## Kayıtlar
 
 Oyunlar ve kendi yazılan senaryolar tarayıcıda saklanır. Başka bir cihaza geçerken **Ayarlar → Yedeği indir**, diğer cihazda **Yedeği yükle**.
