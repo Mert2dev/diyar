@@ -39,6 +39,7 @@ const I = {
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  advisor: '<svg viewBox="0 0 24 24"><path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M10 9.4a2 2 0 1 1 3 1.7c-.7.4-1 .8-1 1.4"/><path d="M12 14.6h.01"/></svg>',
   eye: '<svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></svg>',
 };
 
@@ -850,7 +851,10 @@ function renderPanel() {
   const { save, scen } = P;
   const sl = setupFields(scen).map(f => save.setup?.[f.id] ? `<li><span>${esc(f.label.replace(/\s*\(.*\)$/, ''))}</span>${esc(save.setup[f.id])}</li>` : '').join('');
   el.innerHTML = `
-    <button class="icon-btn panel-x" data-act="toggle-panel" aria-label="Paneli kapat">${I.close}</button>
+    <div class="panel-top">
+      <button class="btn sm adv-open" data-act="advisor" aria-label="Danışmana sor" title="Danışmana sor">${I.advisor}<span>Danışman</span></button>
+      <button class="icon-btn panel-x" data-act="toggle-panel" aria-label="Paneli kapat">${I.close}</button>
+    </div>
     ${statsHTML()}
     <section class="pbox">
       <h3>Hafıza notları</h3>
@@ -881,6 +885,128 @@ function renderPanel() {
     P.save.castEdits = { ...(P.save.castEdits || {}), [t.dataset.cast]: t.value };
     writeSave(P.save);
   }, 400)));
+}
+
+/* ---------- danışman ---------- */
+const ADVISOR_RULES = `Sen bu hikayedeki oyuncunun güvendiği danışmansın: bilgili, sadık ve açık sözlü biri. Oyuncu hikayenin dışından sana soru soruyor; sen sahne yazmıyorsun, soruyu cevaplıyorsun.
+- Aşağıdaki dünya bilgisine, hikaye özetine, defterdeki gerçeklere, durum değerlerine ve son sahneye dayanarak cevapla. Oyuncunun karakterinin bilebileceği şeyleri söyle; karakterin henüz öğrenmediği sırları ve başkalarının gizli niyetlerini açma.
+- Cevap kayıtlarda yoksa (örneğin bir köyün nüfusu) dünyaya ve çağa uygun makul bir tahmin ver ve bunun tahmin olduğunu belirt ("tahminen", "yaklaşık"). Kayıtlardaki hiçbir bilgiyle çelişme.
+- Tavsiye istenirse kısa ve somut öner; kararı oyuncuya bırak.
+- Hikayeyi ilerletme, oyuncu adına eylem yazma, yeni olay uydurma.
+- Yalnızca Türkçe, 2-5 cümle, düz metin yaz. Başlık, madde listesi ve <durum>, <defter>, <sahne>, <secenekler> gibi etiketler kullanma.`;
+
+function advisorSystem(save, scen, question) {
+  const parts = [ADVISOR_RULES, `## Senaryo: ${scen.title}\n${scen.world}`];
+  const sl = setupLines(save, scen);
+  if (sl) parts.push(`## Oyuncunun seçimleri\n${sl}`);
+  const st = currentStats();
+  if (st) parts.push('## Güncel durum\n' + Object.entries(st).map(([k, v]) => `- ${k}: ${Array.isArray(v) ? v.join(', ') : (v && typeof v === 'object' ? JSON.stringify(v) : v)}`).join('\n'));
+  const lt = ledgerText(ledgerOf(save.messages), { maxTokens: 2500, query: question });
+  if (lt) parts.push(`## Hikaye defteri (kesin gerçekler)\n${lt}`);
+  if (save.summary?.trim()) parts.push(`## Şimdiye kadar olanlar\n${save.summary.trim()}`);
+  if (save.notes?.trim()) parts.push(`## Oyuncunun notları (kesin gerçek)\n${save.notes.trim()}`);
+  const recent = save.messages.filter(m => m.role === 'model').slice(-2).map(m => stripScenes(splitOutput(cur(m)).visible).trim()).filter(Boolean);
+  if (recent.length) parts.push(`## Son sahneler\n${recent.join('\n\n---\n\n')}`);
+  return parts.join('\n\n');
+}
+
+const advClean = t => splitOutput(stripThink(t)).visible.trim();
+
+function advLogHTML() {
+  const me = P, list = me.save.advisor || [], pend = me.adv;
+  let h = list.map((m, i) => m.role === 'user'
+    ? `<div class="adv-msg me"><p>${esc(m.text)}</p></div>`
+    : `<div class="adv-msg"><div class="adv-body">${md(m.text)}</div><button type="button" class="adv-pin" data-adv-pin="${i}">Hafıza notlarına ekle</button></div>`).join('');
+  if (pend) {
+    h += `<div class="adv-msg me"><p>${esc(pend.q)}</p></div>`;
+    if (pend.error) h += `<div class="adv-msg"><p class="adv-err">${esc(pend.error)}</p></div>`;
+    else h += `<div class="adv-msg"><div class="adv-body">${pend.out ? md(pend.out) : '<p class="loading">Düşünüyor</p>'}</div></div>`;
+  }
+  if (!h) h = `<p class="adv-empty">Danışmanın hikayeyi ve dünyayı biliyor. Bir şey sor.</p>
+    <div class="adv-chips">${['Burası hakkında ne biliyoruz?', 'Elimizde neler var?', 'Şimdi ne yapmalıyım?', 'Kimlere güvenebilirim?'].map(q => `<button type="button" class="adv-chip" data-adv-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>`;
+  return h;
+}
+
+function renderAdvisor(stick = true) {
+  const log = $('#adv-log'); if (!log) return;
+  log.innerHTML = advLogHTML();
+  if (stick) log.scrollTop = log.scrollHeight;
+}
+
+function openAdvisor() {
+  if (!P) return;
+  const me = P;
+  me.save.advisor = me.save.advisor || [];
+  const back = openModal(`<div class="adv">
+    <div class="m-head adv-head"><h2>Danışman</h2><button class="icon-btn" data-act="close-modal" aria-label="Kapat">${I.close}</button></div>
+    <p class="hint adv-hint">Hikayeyi ilerletmeden sorabilirsin. Cevaplar hikayedeki kayıtlara dayanır; kayıtta olmayan bir şey sorarsan danışman tahmin ettiğini söyler.</p>
+    <div class="adv-log" id="adv-log" aria-live="polite"></div>
+    <form class="adv-form" id="adv-form">
+      <textarea id="adv-input" rows="1" placeholder="Danışmana sor…" aria-label="Danışmana sorun"></textarea>
+      <button type="submit" class="send" id="adv-send" aria-label="Gönder">${I.send}</button>
+    </form>
+  </div>`, 'advisor-modal');
+  renderAdvisor();
+  const input = $('#adv-input', back);
+  const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px'; };
+  input.addEventListener('input', grow);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#adv-form', back).requestSubmit(); }
+  });
+  $('#adv-form', back).addEventListener('submit', e => {
+    e.preventDefault();
+    const t = input.value.trim();
+    if (!t || me.adv && !me.adv.error) return;
+    input.value = ''; grow();
+    askAdvisor(t);
+  });
+  $('#adv-log', back).addEventListener('click', e => {
+    const q = e.target.closest('[data-adv-q]');
+    if (q) { askAdvisor(q.dataset.advQ); return; }
+    const pin = e.target.closest('[data-adv-pin]');
+    if (pin) {
+      const m = me.save.advisor[+pin.dataset.advPin]; if (!m) return;
+      me.save.notes = (me.save.notes?.trim() ? me.save.notes.trim() + '\n' : '') + m.text;
+      writeSave(me.save); if (P === me) renderPanel();
+      pin.textContent = 'Eklendi'; pin.disabled = true;
+      toast('Hafıza notlarına eklendi. Dilersen panelden düzenleyebilirsin.');
+    }
+  });
+  setTimeout(() => input.focus({ preventScroll: true }), 60);
+}
+
+async function askAdvisor(text) {
+  const me = P; if (!me || (me.adv && !me.adv.error)) return;
+  const { save, scen } = me;
+  if (!hasKey()) { closeModal(true); openSettings('Danışmanı kullanmak için bir API anahtarı ekle.'); return; }
+  me.adv = { q: text, out: '' };
+  renderAdvisor();
+  const live = () => P === me && $('#adv-log');
+  const fail = msg => { me.adv.error = msg; if (live()) { renderAdvisor(); const inp = $('#adv-input'); if (inp && !inp.value) inp.value = text; } };
+  try {
+    if (!(await ensureModel())) return fail('Model seçilemedi. Ayarlar\'dan anahtarını ve modelini kontrol et.');
+    // Yalnızca user/model sırası bozulmasın: ardışık aynı rolleri birleştir, user ile başla
+    const history = [];
+    for (const m of [...save.advisor, { role: 'user', text }].slice(-24)) {
+      const last = history[history.length - 1];
+      if (last && last.role === m.role) last.text += '\n\n' + m.text; else history.push({ role: m.role, text: m.text });
+    }
+    while (history.length && history[0].role !== 'user') history.shift();
+    let out = '';
+    for await (const t of streamChat({ settings, system: advisorSystem(save, scen, text), history, temperature: 0.6, maxTokens: 700, signal: AbortSignal.timeout(60000) })) {
+      out += t; me.adv.out = advClean(out);
+      if (live()) renderAdvisor();
+    }
+    const answer = advClean(out);
+    if (!answer) return fail('Danışman boş bir cevap verdi. Tekrar sor.');
+    save.advisor.push({ role: 'user', text }, { role: 'model', text: answer });
+    save.advisor = save.advisor.slice(-40);
+    writeSave(save);
+    me.adv = null;
+    if (live()) renderAdvisor();
+  } catch (e) {
+    fail(e instanceof AIError ? e.message : e.name === 'TimeoutError' ? 'Danışman zamanında cevap veremedi. Tekrar dene.' : 'Danışman cevap veremedi: ' + (e.message || 'bilinmeyen hata'));
+  }
 }
 
 function sendUser(text, cont = false) {
@@ -1504,6 +1630,7 @@ document.addEventListener('click', e => {
     // oyun ekranı
     case 'scene-retry': P?.scene?.retry(); break;
     case 'toggle-panel': $('.play')?.classList.toggle('panel-open'); break;
+    case 'advisor': openAdvisor(); break;
     case 'opt': if (P && !P.busy) sendUser(b.textContent.trim()); break;
     case 'continue':
       if (!P || P.busy) break;

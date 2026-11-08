@@ -654,3 +654,31 @@ dialog.ask .row { flex-direction: row-reverse; justify-content: flex-start; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
 }
+
+/* danışman */
+.panel-top { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding-top: 6px; }
+.panel-top .panel-x { float: none; margin-right: -8px; }
+.adv-open { gap: 6px; }
+.adv-open svg { width: 16px; height: 16px; }
+.modal-back:has(.advisor-modal) { padding: 16px; }
+.advisor-modal { width: min(540px, 100%); height: min(680px, 100%); border: 1px solid var(--rule); overflow: hidden; }
+.adv { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.adv-head { padding: 12px 12px 4px 22px; position: static; }
+.adv-head h2 { font-size: 2rem; }
+.adv-hint { margin: 0; padding: 0 22px 12px; }
+.adv-log { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 22px; display: flex; flex-direction: column; gap: 16px; border-top: 1px solid var(--rule); scrollbar-width: thin; scrollbar-color: var(--rule) transparent; }
+.adv-msg.me { padding-left: 12px; border-left: 3px solid var(--accent); }
+.adv-msg.me p { margin: 0; font-weight: 500; line-height: 1.5; }
+.adv-body { font-family: var(--read); font-size: 1rem; line-height: 1.6; }
+.adv-body p { margin: 0 0 .7em; }
+.adv-body p:last-child { margin-bottom: 0; }
+.adv-pin { background: none; border: 0; padding: 4px 0 0; color: var(--dim); font-size: .8rem; cursor: pointer; }
+.adv-pin:hover:not(:disabled) { color: var(--accent-text); }
+.adv-pin:disabled { cursor: default; }
+.adv-err { margin: 0; color: var(--accent-text); font-size: .94rem; line-height: 1.45; }
+.adv-empty { margin: 0; color: var(--dim); }
+.adv-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.adv-chip { background: var(--bg); border: 1px solid var(--rule); color: var(--text); padding: 7px 12px; font-size: .9rem; cursor: pointer; }
+.adv-chip:hover { border-color: var(--accent); color: var(--accent-text); }
+.adv-form { display: flex; align-items: flex-end; gap: 4px; padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); border-top: 1px solid var(--rule); }
+.adv-form textarea { flex: 1; resize: none; min-height: 46px; max-height: 140px; padding: 11px 12px; font-family: var(--read); font-size: 1rem; background: var(--bg); }
