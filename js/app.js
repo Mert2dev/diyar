@@ -1,11 +1,11 @@
-import { SCENARIOS, CATEGORIES, SHELVES } from './scenarios.js';
-import { coverSVG, THEMES, themeOf } from './covers.js';
-import { SceneStage, SCENE_STYLES, parseScenes, parseCards, parseSceneTag, sceneTagRe, sceneProblem, composeScene, applyCards, castOf, withEdits, visualAnchor, keepsDistance } from './scenes.js';
-import { PROVIDERS, KEYLESS, providerLabel, AIError, streamChat, complete, listModels, pickDefaultModel, rankModels } from './ai.js';
+import { SCENARIOS, CATEGORIES, SHELVES } from './scenarios.js?v=20261109';
+import { coverSVG, THEMES, themeOf } from './covers.js?v=20261109';
+import { SceneStage, SCENE_STYLES, parseScenes, parseCards, parseSceneTag, sceneTagRe, sceneProblem, composeScene, applyCards, castOf, withEdits, visualAnchor, keepsDistance } from './scenes.js?v=20261109';
+import { PROVIDERS, KEYLESS, providerLabel, AIError, streamChat, complete, listModels, pickDefaultModel, rankModels } from './ai.js?v=20261109';
 import {
   approxTokens, cur, stripThink, TAG_CUT, stripScenes, stripCards, splitOutput, ledgerOf, ledgerText, contextBudget, fitHistory, compactOverflow,
   summaryPlan, recall, properNames, acceptableSummary, rewindSummary, qualityIssue, isLooping, removeRepeats, trimToSentence,
-} from './memory.js';
+} from './memory.js?v=20261109';
 
 /* ---------- yardımcılar ---------- */
 const app = document.getElementById('app');
