@@ -1,11 +1,11 @@
-import { SCENARIOS, CATEGORIES, SHELVES } from './scenarios.js?v=20261109';
-import { coverSVG, THEMES, themeOf } from './covers.js?v=20261109';
-import { SceneStage, SCENE_STYLES, parseScenes, parseCards, parseSceneTag, sceneTagRe, sceneProblem, composeScene, applyCards, castOf, withEdits, visualAnchor, keepsDistance } from './scenes.js?v=20261109';
-import { PROVIDERS, KEYLESS, providerLabel, AIError, streamChat, complete, listModels, pickDefaultModel, rankModels } from './ai.js?v=20261109';
+import { SCENARIOS, CATEGORIES, SHELVES } from './scenarios.js?v=20261109b';
+import { coverSVG, THEMES, themeOf } from './covers.js?v=20261109b';
+import { SceneStage, SCENE_STYLES, parseScenes, parseCards, parseSceneTag, sceneTagRe, sceneProblem, composeScene, applyCards, castOf, withEdits, visualAnchor, keepsDistance } from './scenes.js?v=20261109b';
+import { PROVIDERS, KEYLESS, providerLabel, AIError, streamChat, complete, listModels, pickDefaultModel, rankModels } from './ai.js?v=20261109b';
 import {
   approxTokens, cur, stripThink, TAG_CUT, stripScenes, stripCards, splitOutput, ledgerOf, ledgerText, contextBudget, fitHistory, compactOverflow,
   summaryPlan, recall, properNames, acceptableSummary, rewindSummary, qualityIssue, isLooping, removeRepeats, trimToSentence,
-} from './memory.js?v=20261109';
+} from './memory.js?v=20261109b';
 
 /* ---------- yardımcılar ---------- */
 const app = document.getElementById('app');
@@ -431,11 +431,11 @@ const homeState = { cat: 'Tümü', q: '' };
 
 function topbar(extra = '') {
   return `<header class="topbar">
-    <a class="brand" href="#/" aria-label="Diyar ana sayfa">Diyar</a>
+    <a class="brand" href="#/" aria-label="Diyar ana sayfa"><span class="brand-mark" aria-hidden="true"></span>Diyar</a>
     ${extra}
     <div class="topbar-actions">
-      <a class="top-link" href="#/olustur" aria-label="Kendi dünyanı yaz">${I.plus}<span>Kendi dünyanı yaz</span></a>
-      <button class="top-link" data-act="settings" aria-label="Ayarlar">${I.gear}<span>Ayarlar</span></button>
+      <a class="btn ghost" href="#/olustur">${I.plus}<span>Senaryo oluştur</span></a>
+      <button class="icon-btn" data-act="settings" aria-label="Ayarlar" title="Ayarlar">${I.gear}</button>
     </div>
   </header>`;
 }
@@ -459,51 +459,47 @@ function lastLines(save) {
 function renderHome() {
   leavePlay();
   view = 'home';
-  document.title = 'Diyar — Türkçe rol yapma ve hikaye oyunları';
+  document.title = 'Diyar — hikaye oyunları';
   const saves = savesIndex();
   const last = saves[0];
-  const lastSave = last && loadSave(last.id);
-  const lastScen = last && getScenario(last.scenarioId, lastSave);
+  const lastScen = last && getScenario(last.scenarioId, loadSave(last.id));
+  const featured = lastScen || SCENARIOS[0];
+  const heroAction = lastScen
+    ? `<a class="btn primary big" href="#/oyna/${esc(last.id)}">Kaldığın yerden devam et</a><span class="hero-meta">${esc(last.label || '')}${last.turns ? `, ${last.turns} tur` : ''}, ${timeAgo(last.updatedAt)}</span>`
+    : `<a class="btn primary big" href="#/senaryo/${esc(featured.id)}">Bu dünyaya gir</a><span class="hero-meta">${modeLabel(featured.mode)} modu</span>`;
   const cats = ['Tümü', ...CATEGORIES.filter(c => allScenarios().some(s => (s.tags || []).includes(c)))];
   if (customs().length) cats.push('Benim senaryolarım');
 
   app.innerHTML = `
   <div class="home">
     ${topbar(`<label class="search">${I.search}<input type="search" id="q" placeholder="Dünya, karakter ya da konu ara" value="${esc(homeState.q)}" aria-label="Senaryo ara"></label>`)}
-    ${!hasKey() ? `<div class="key-strip"><span>Anahtarsız da oynayabilirsin, ama ücretsiz bir Google Gemini anahtarıyla hikaye çok daha iyi yazılır. Almak bir dakika sürer.</span><button data-act="settings">Anahtarı ekle</button></div>` : ''}
-    <header class="mast" id="mast">
-      <h1 class="mast-word">Diyar</h1>
-      <div class="mast-say">
-        <p class="mast-line">Bir cümle yaz, dünya cevap versin.</p>
-        <p class="mast-sub">Diyar, yapay zekayla Türkçe oynanan bir rol yapma sitesi. Hazır bir dünya seç ya da kendininkini yaz. Verdiğin sözü de kazandığın düşmanı da hikaye unutmaz.</p>
-        <div class="mast-cta"><button class="btn primary big" data-act="to-wall">Bir dünya seç</button><a class="btn ghost" href="#/olustur">Kendi dünyanı yaz</a></div>
+    ${!hasKey() ? `<div class="key-banner"><div>Anahtarsız da oynayabilirsin, ama ücretsiz bir Google Gemini anahtarıyla hikaye çok daha iyi yazılır. Almak bir dakika sürer.</div><button class="btn primary" data-act="settings">Anahtarı ekle</button></div>` : ''}
+    <section class="hero">
+      <div class="hero-art">${coverHTML(featured)}</div>
+      <div class="hero-text">
+        <p class="hero-kicker">${lastScen ? 'Son oynadığın' : 'Bu haftanın dünyası'}</p>
+        <h1>${esc(featured.title)}</h1>
+        <p class="hero-sub">${esc(featured.subtitle)}</p>
+        <div class="hero-cta">${heroAction}</div>
       </div>
-    </header>
-    ${lastScen ? `<a class="bookmark" href="#/oyna/${esc(last.id)}" style="${worldVars(lastScen)}">
-      <div><p class="bookmark-where">Kaldığın yer: ${esc(lastScen.title)}${last.label ? ', ' + esc(last.label) : ''}, ${timeAgo(last.updatedAt)}</p>
-      <p class="bookmark-text">${esc(lastLines(lastSave) || lastScen.subtitle)}</p></div>
-      <span class="btn">Devam et</span></a>` : ''}
-    <nav class="index" id="wall-top" aria-label="Türler">
+    </section>
+    <nav class="chips" aria-label="Kategoriler">
       ${cats.map(c => `<button class="chip ${c === homeState.cat ? 'on' : ''}" data-act="cat" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}
     </nav>
     <div id="shelves"></div>
     <footer class="foot">
-      <p>Oyunların ve senaryoların yalnızca bu tarayıcıda saklanır. Başka bir cihaza geçerken <button class="linklike" data-act="settings">Ayarlar</button> bölümünden yedeğini al.</p>
-      <p>Fandom dünyaları hayranların oynaması için yazıldı. Diyar'ın bu eserlerin sahipleriyle bir bağı yok.</p>
+      <p>Oyunların ve senaryoların bu tarayıcıda saklanır. Başka bir cihaza geçerken <button class="linklike" data-act="settings">Ayarlar</button> bölümünden yedeğini al.</p>
     </footer>
   </div>`;
   $('#q').addEventListener('input', debounce(e => { homeState.q = e.target.value.trim(); renderShelves(); }, 150));
-  const bar = $('.topbar'), mast = $('#mast');
-  if (bar && mast && 'IntersectionObserver' in window) {
-    new IntersectionObserver(([en]) => bar.classList.toggle('past', !en.isIntersecting), { rootMargin: '-120px 0px 0px' }).observe(mast);
-  }
   renderShelves();
 }
 
-function scenCard(s, big = false) {
-  return `<a class="card ${big ? 'big' : ''}" href="#/senaryo/${esc(s.id)}">
-    ${posterHTML(s)}
-    <div class="card-meta"><span class="card-mode">${modeLabel(s.mode)}</span><span class="card-sub">${esc(s.subtitle)}</span></div>
+function scenCard(s) {
+  return `<a class="card" href="#/senaryo/${esc(s.id)}">
+    <div class="cover">${coverHTML(s)}<span class="badge">${modeLabel(s.mode)}</span></div>
+    <h3>${esc(s.title)}</h3>
+    <p>${esc(s.subtitle)}</p>
   </a>`;
 }
 function saveCard(x) {
@@ -511,14 +507,12 @@ function saveCard(x) {
   const s = getScenario(x.scenarioId, save);
   if (!s) return '';
   return `<a class="card save" href="#/oyna/${esc(x.id)}">
-    ${posterHTML(s)}
-    <div class="card-meta"><span class="card-mode">${x.turns || 0} tur</span><span class="card-sub">${esc(x.label || '')}${x.label ? ', ' : ''}${timeAgo(x.updatedAt)}</span></div>
+    <div class="cover">${coverHTML(s)}<span class="badge">${x.turns || 0} tur</span></div>
+    <h3>${esc(s.title)}</h3>
+    <p>${esc(x.label || '')}${x.label ? ', ' : ''}${timeAgo(x.updatedAt)}</p>
   </a>`;
 }
-const createCard = () => `<a class="card create" href="#/olustur">
-    <div class="poster create-poster"><span class="create-mark">${I.plus}</span><b>Kendi dünyanı yaz</b></div>
-    <div class="card-meta"><span class="card-mode">Senaryo oluştur</span><span class="card-sub">Dünyanı, karakterlerini ve açılış sahneni sen belirle.</span></div>
-  </a>`;
+const createCard = () => `<a class="card create" href="#/olustur"><div class="cover create-cover">${I.plus}<span>Kendi dünyanı yaz</span></div><h3>Yeni senaryo</h3><p>Dünyanı, karakterlerini ve açılış sahneni sen belirle.</p></a>`;
 
 // Oyunun nasıl aktığını anlatmak yerine göster
 const SPECIMEN = `<aside class="specimen" aria-label="Örnek oyun metni">
@@ -533,19 +527,15 @@ function renderShelves() {
   const q = homeState.q.toLocaleLowerCase('tr');
   const cat = homeState.cat;
   if (cat === 'Tümü' && !q) {
-    const others = savesIndex().slice(1, 9);
+    const saves = savesIndex().slice(0, 8);
     const mine = customs();
     let html = '';
-    if (others.length) html += shelf('Diğer oyunların', '', others.map(saveCard).join(''));
+    if (saves.length) html += shelf('Kaldığın yerden devam et', '', saves.map(saveCard).join(''), 'row');
     SHELVES.forEach(sh => {
       const list = SCENARIOS.filter(s => s.shelf === sh.id);
-      if (!list.length) return;
-      const lead = list.length >= 5;
-      const cards = list.map((s, i) => scenCard(s, lead && i === 0)).join('');
-      const extra = sh.id === 'tarih' ? SPECIMEN : sh.id === 'ozgun' ? createCard() : '';
-      html += shelf(sh.title, sh.hint, cards + extra, `${lead ? 'lead' : ''} ${sh.id}`);
+      if (list.length) html += shelf(sh.title, sh.hint, list.map(scenCard).join(''));
     });
-    if (mine.length) html += shelf('Senin senaryoların', '', mine.map(s => scenCard(s)).join(''));
+    html += shelf('Senin senaryoların', mine.length ? '' : 'Henüz yok. İlkini yazmak birkaç dakika sürer.', mine.map(scenCard).join('') + createCard());
     el.innerHTML = html;
     return;
   }
@@ -554,11 +544,11 @@ function renderShelves() {
   else if (cat !== 'Tümü') list = list.filter(s => (s.tags || []).includes(cat));
   if (q) list = list.filter(s => [s.title, s.subtitle, s.description, ...(s.tags || [])].join(' ').toLocaleLowerCase('tr').includes(q));
   el.innerHTML = list.length
-    ? shelf(q ? `“${esc(homeState.q)}”` : esc(cat), `${list.length} dünya`, list.map(s => scenCard(s)).join(''))
-    : `<div class="empty"><p>Bu aramaya uyan bir dünya yok. Belki de yazılmayı bekliyordur.</p><a class="btn" href="#/olustur">Bu dünyayı kendin yaz</a></div>`;
+    ? shelf(`${list.length} senaryo`, '', list.map(scenCard).join(''))
+    : `<div class="empty"><p>Bu aramaya uyan bir senaryo yok.</p><a class="btn" href="#/olustur">Bu dünyayı kendin yaz</a></div>`;
 }
-function shelf(title, hint, cards, cls = '') {
-  return `<section class="wall-sec ${cls}"><div class="wall"><header class="wall-head"><h2>${title}</h2>${hint ? `<p>${esc(hint)}</p>` : ''}</header>${cards}</div></section>`;
+function shelf(title, hint, cards, kind = 'grid') {
+  return `<section class="shelf"><div class="shelf-head"><h2>${esc(title)}</h2>${hint ? `<p>${esc(hint)}</p>` : ''}</div><div class="${kind === 'row' ? 'row-scroll' : 'grid'}">${cards}</div></section>`;
 }
 
 /* ---------- senaryo detayı ---------- */
@@ -576,23 +566,19 @@ function openScenario(id) {
     return `<label class="field"><span>${esc(f.label)}</span><input name="${esc(f.id)}" placeholder="${esc(f.placeholder || '')}" ${req} maxlength="160"></label>`;
   }).join('');
   const back = openModal(`
-    <div class="sheet-art">${posterHTML(s)}</div>
-    <button class="icon-btn sheet-x" data-act="close-modal" aria-label="Kapat" title="Kapat">${I.close}</button>
+    <div class="scen-cover">${coverHTML(s)}<button class="icon-btn modal-x" data-act="close-modal" aria-label="Kapat">${I.close}</button></div>
     <div class="scen-body">
-      <p class="scen-tags">${modeLabel(s.mode)}${(s.tags || []).length ? ' · ' + esc(s.tags.slice(0, 4).join(', ')) : ''}</p>
-      <h2>${esc(s.subtitle)}</h2>
-      ${s.description ? `<p class="scen-desc">${esc(s.description)}</p>` : ''}
+      <p class="scen-tags">${modeLabel(s.mode)} modu${(s.tags || []).length ? ', ' + esc(s.tags.slice(0, 4).join(', ')) : ''}</p>
+      <h2>${esc(s.title)}</h2>
+      <p class="scen-desc">${esc(s.description || s.subtitle)}</p>
       ${saves.length ? `<div class="scen-saves"><h3>Bu dünyadaki oyunların</h3>${saves.map(x => `<div class="save-row"><a href="#/oyna/${esc(x.id)}"><strong>${esc(x.label || 'Oyun')}</strong><span>${x.turns || 0} tur, ${timeAgo(x.updatedAt)}</span></a><button class="icon-btn sm" data-act="del-save" data-id="${esc(x.id)}" aria-label="Oyunu sil" title="Oyunu sil">${I.trash}</button></div>`).join('')}</div>` : ''}
       <form class="setup" id="setup-form">
         <h3>${saves.length ? 'Yeni bir oyun başlat' : 'Oyuna hazırlan'}</h3>
         ${fields}
         <button class="btn primary big" type="submit">Oyuna başla</button>
       </form>
-      ${isCustom ? `<div class="scen-own"><a class="btn ghost" href="#/olustur/${esc(s.id)}">Senaryoyu düzenle</a><button class="btn ghost danger" data-act="del-scen" data-id="${esc(s.id)}">Senaryoyu sil</button></div>` : ''}
+      ${isCustom ? `<div class="scen-own"><a class="btn ghost" href="#/olustur/${esc(s.id)}">${I.edit}<span>Senaryoyu düzenle</span></a><button class="btn ghost danger" data-act="del-scen" data-id="${esc(s.id)}">${I.trash}<span>Senaryoyu sil</span></button></div>` : ''}
     </div>`, 'scen-modal', () => { if (location.hash.startsWith('#/senaryo')) location.hash = '#/'; });
-  const sheet = $('.scen-modal', back);
-  sheet.style.cssText = worldVars(s);
-  sheet.setAttribute('aria-label', s.title);
   $$('select[data-custom="1"]', back).forEach(sel => sel.addEventListener('change', () => {
     const inp = sel.parentElement.querySelector('.custom-in');
     inp.hidden = sel.value !== '__diger'; if (!inp.hidden) inp.focus();
@@ -633,34 +619,32 @@ function renderPlay(id) {
   view = 'play';
   P = { save, scen, busy: false, ctrl: null, error: null, summarizing: false };
   document.title = `${scen.title} — Diyar`;
-  const wide = window.matchMedia('(min-width: 1360px)').matches;
+  const wide = window.matchMedia('(min-width: 1100px)').matches;
   app.innerHTML = `
-  <div class="play ${wide ? 'panel-open' : ''}" style="${worldVars(scen)}">
-    <aside class="plate" id="plate" data-act="toggle-plate">
-      <div class="scene-bg" id="scene-bg" aria-hidden="true"><div class="layer"></div><div class="layer"></div></div>
-      <button type="button" class="scene-status" id="scene-status" data-act="scene-retry" hidden></button>
-      <div class="plate-cap"><strong>${esc(scen.title)}</strong><span id="save-label-2">${esc(save.label)}</span></div>
-    </aside>
-    <div class="read">
-      <header class="play-top">
-        <a class="top-text" href="#/" aria-label="Dünyalara dön" title="Dünyalara dön">${I.back}<span>Dünyalar</span></a>
-        <div class="play-title"><strong>${esc(scen.title)}</strong><span id="save-label">${esc(save.label)}</span></div>
-        <div class="play-spacer"></div>
-        <button class="top-text" data-act="advisor" aria-label="Danışmana sor" title="Danışmana sor">${I.advisor}<span>Danışman</span></button>
-        <button class="top-text" data-act="toggle-panel" aria-label="Defter: durum ve hafıza" title="Durum ve hafıza">${I.panel}<span>Defter</span></button>
-        <button class="top-text" data-act="settings" aria-label="Ayarlar" title="Ayarlar">${I.gear}<span>Ayarlar</span></button>
-      </header>
-      <main class="story-wrap" id="story-wrap"><div class="story" id="story"></div></main>
-      <footer class="composer">
-        <div class="options" id="options"></div>
-        <form class="compose" id="compose">
-          <textarea id="input" rows="1" placeholder="Ne yapıyorsun?" aria-label="Eylemin"></textarea>
-          <button type="button" class="icon-btn" data-act="continue" title="Bir şey yapmadan hikayeyi ilerlet" aria-label="Hikayeyi ilerlet" style="width:46px;height:46px">${I.forward}</button>
-          <button type="submit" class="send" id="send" aria-label="Gönder">${I.send}</button>
-        </form>
-      </footer>
+  <div class="play ${wide ? 'panel-open' : ''}">
+    <header class="play-top">
+      <a class="icon-btn" href="#/" aria-label="Ana sayfa" title="Ana sayfa">${I.back}</a>
+      <div class="play-title"><strong>${esc(scen.title)}</strong><span id="save-label">${esc(save.label)}</span></div>
+      <button class="btn ghost sm adv-top" data-act="advisor" aria-label="Danışmana sor" title="Danışmana sor">${I.advisor}<span>Danışman</span></button>
+      <button class="icon-btn" data-act="settings" aria-label="Ayarlar" title="Ayarlar">${I.gear}</button>
+      <button class="icon-btn" data-act="toggle-panel" aria-label="Durum ve hafıza paneli" title="Durum ve hafıza">${I.panel}</button>
+    </header>
+    <div class="play-body">
+      <div class="stage">
+        <div class="scene-bg" id="scene-bg" aria-hidden="true" ${settings.images ? '' : 'hidden'}><div class="layer"></div><div class="layer"></div><div class="shade"></div></div>
+        <button type="button" class="scene-status" id="scene-status" data-act="scene-retry" hidden></button>
+        <main class="story-wrap" id="story-wrap"><div class="story" id="story"></div></main>
+      </div>
+      <aside class="panel" id="panel" aria-label="Durum ve hafıza"></aside>
     </div>
-    <aside class="panel" id="panel" aria-label="Durum ve hafıza"></aside>
+    <footer class="composer">
+      <div class="options" id="options"></div>
+      <form class="compose" id="compose">
+        <textarea id="input" rows="1" placeholder="Ne yapıyorsun?" aria-label="Eylemin"></textarea>
+        <button type="button" class="icon-btn" data-act="continue" title="Bir şey yapmadan hikayeyi ilerlet" aria-label="Hikayeyi ilerlet">${I.forward}</button>
+        <button type="submit" class="send" id="send" aria-label="Gönder">${I.send}</button>
+      </form>
+    </footer>
   </div>`;
   const input = $('#input');
   const resize = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 180) + 'px'; };
@@ -689,9 +673,6 @@ function renderPlay(id) {
       if (ticking) return; ticking = true;
       requestAnimationFrame(() => { ticking = false; updateActiveScene(); });
     }, { passive: true });
-  } else {
-    const l = $('#scene-bg .layer');
-    l.innerHTML = coverHTML(scen); l.classList.add('on');
   }
   renderStory(true);
   renderPanel();
@@ -736,7 +717,7 @@ function renderStory(jump) {
   const el = $('#story'); if (!el) return;
   const { save, scen } = P;
   const msgs = save.messages;
-  const head = `<div class="story-head"><h1 class="sr-only">${esc(scen.title)}</h1><p class="epigraph">${esc(scen.subtitle || save.label)}</p></div>`;
+  const head = `<div class="story-head"><h1>${esc(scen.title)}</h1><p>${esc(save.label)}</p></div>`;
   let html = head;
   const lastIdx = msgs.length - 1;
   let cast = new Map();
@@ -1583,7 +1564,6 @@ function renderCreator(editId) {
   app.innerHTML = `
   <div class="creator">
     ${topbar()}
-    <div class="creator-wrap">
     <form class="cform" id="cform">
       <h1>${ex ? 'Senaryoyu düzenle' : 'Kendi dünyanı yaz'}</h1>
       <p class="lead">Ne kadar ayrıntı verirsen yapay zeka dünyana o kadar sadık kalır. Kanondaki bir evreni (bir dizi, kitap, oyun) adıyla yazman da yeterli; yapay zeka onu tanıyorsa gerisini tamamlar.</p>
@@ -1619,27 +1599,21 @@ function renderCreator(editId) {
 
       <div class="row form-end"><a class="btn ghost" href="${ex ? '#/senaryo/' + esc(ex.id) : '#/'}">Vazgeç</a><button class="btn primary big" type="submit">${ex ? 'Değişiklikleri kaydet' : 'Senaryoyu kaydet'}</button></div>
     </form>
-    <aside class="c-preview" aria-hidden="true"><div id="c-poster"></div><p class="hint">Afişin duvarda böyle görünecek. İki nokta koyarsan sonrası alt başlık olur.</p></aside>
-    </div>
   </div>`;
   const form = $('#cform');
-  const preview = () => { const el = $('#c-poster'); if (el) el.innerHTML = posterHTML({ id: 'onizleme', title: form.elements.title.value, cover, image }); };
-  form.addEventListener('input', debounce(e => { if (e.target.name === 'title') preview(); }, 60));
   form.addEventListener('change', e => { if (e.target.name === 'mode') $('.char-field').hidden = e.target.value !== 'karakter'; });
   $('#cover-pick').addEventListener('click', e => {
     const b = e.target.closest('.cp'); if (!b) return;
     cover = b.dataset.cover; image = '';
     $$('.cp').forEach(x => x.classList.toggle('on', x === b));
     $('#cimg-state').textContent = '';
-    preview();
   });
   $('#cimg').addEventListener('change', async e => {
     const file = e.target.files[0]; if (!file) return;
-    try { image = await readImage(file); $$('.cp').forEach(x => x.classList.remove('on')); $('#cimg-state').textContent = 'Kendi resmin kullanılacak.'; preview(); }
+    try { image = await readImage(file); $$('.cp').forEach(x => x.classList.remove('on')); $('#cimg-state').textContent = 'Kendi resmin kullanılacak.'; }
     catch { toast('Bu resim okunamadı.'); }
   });
-  $('#cimg-clear')?.addEventListener('click', () => { image = ''; $('#cimg-state').textContent = ''; $(`.cp[data-cover="${cover}"]`)?.classList.add('on'); preview(); });
-  preview();
+  $('#cimg-clear')?.addEventListener('click', () => { image = ''; $('#cimg-state').textContent = ''; $(`.cp[data-cover="${cover}"]`)?.classList.add('on'); });
   form.addEventListener('submit', e => {
     e.preventDefault();
     const fd = new FormData(form);
