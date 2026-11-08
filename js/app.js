@@ -1,7 +1,11 @@
 import { SCENARIOS, CATEGORIES, SHELVES } from './scenarios.js';
-import { coverSVG, THEMES } from './covers.js';
-import { SceneStage, SCENE_STYLES } from './scenes.js';
+import { coverSVG, THEMES, themeOf } from './covers.js';
+import { SceneStage, SCENE_STYLES, parseScenes, parseCards, parseSceneTag, sceneTagRe, sceneProblem, composeScene, applyCards, castOf, withEdits, visualAnchor, keepsDistance } from './scenes.js';
 import { PROVIDERS, AIError, streamChat, complete, listModels, pickDefaultModel, rankModels } from './ai.js';
+import {
+  approxTokens, cur, stripThink, TAG_CUT, stripScenes, stripCards, splitOutput, ledgerOf, ledgerText, contextBudget, fitHistory, compactOverflow,
+  summaryPlan, recall, properNames, acceptableSummary, rewindSummary, qualityIssue, isLooping, removeRepeats, trimToSentence,
+} from './memory.js';
 
 /* ---------- yardımcılar ---------- */
 const app = document.getElementById('app');
@@ -35,6 +39,7 @@ const I = {
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  eye: '<svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></svg>',
 };
 
 function timeAgo(ts) {
@@ -61,10 +66,17 @@ function download(name, text, type = 'application/json') {
 }
 
 /* ---------- ayarlar ---------- */
-const DEFAULT_SETTINGS = { provider: 'gemini', keys: {}, models: {}, modelLists: {}, customBase: 'http://localhost:1234/v1', temperature: 0.8, length: 'orta', images: true, imgStyle: 'sinematik' };
+const DEFAULT_SETTINGS = { provider: 'gemini', keys: {}, models: {}, modelLists: {}, customBase: 'http://localhost:1234/v1', temperature: 0.8, length: 'orta', images: true, imgStyle: 'sinematik', theme: 'gece', readSize: 'orta' };
 let settings = { ...DEFAULT_SETTINGS, ...store.get('settings', {}) };
 ['keys', 'models', 'modelLists'].forEach(k => settings[k] = settings[k] || {});
 const saveSettings = () => store.set('settings', settings);
+function applyPrefs() {
+  const r = document.documentElement;
+  r.dataset.theme = settings.theme === 'kagit' ? 'kagit' : 'gece';
+  r.dataset.size = settings.readSize || 'orta';
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', settings.theme === 'kagit' ? '#efe8da' : '#12100e');
+}
+applyPrefs();
 const hasKey = () => settings.provider === 'custom' ? !!settings.customBase : !!(settings.keys[settings.provider] || '').trim();
 
 async function ensureModel() {
@@ -103,29 +115,26 @@ function coverHTML(s) {
   if (s.image) return `<img src="${esc(s.image)}" alt="">`;
   return coverSVG(s.cover || 'kuzey', s.id);
 }
+/** Dünyanın renklerini ve yazı tipini CSS değişkeni olarak verir */
+function worldVars(s) {
+  const t = themeOf(s.cover);
+  return `--w-bg:${t.bg};--w-ink:${t.ink};--w-accent:${t.accent};--w-on:${t.on};--w-font:${t.font};--w-weight:${t.weight};--w-style:${t.style || 'normal'}`;
+}
+/** Başlığı afişin baskı diliyle üstüne yazar; en uzun kelime afişe sığacak şekilde ölçeklenir */
+function posterHTML(s) {
+  const t = themeOf(s.cover);
+  const title = (s.title || '').trim() || 'Başlığın';
+  const i = title.indexOf(':');
+  const big = i > 0 ? title.slice(0, i).trim() : title;
+  const small = i > 0 ? title.slice(i + 1).trim() : '';
+  const longest = Math.max(...big.split(/\s+/).map(w => [...w].length));
+  const fit = Math.min(big.length > 12 ? 17 : 27, 86 / (longest * t.wf)).toFixed(1);
+  const fitS = Math.min(8, 3.4 / t.wf).toFixed(1);
+  const style = `--p-bg:${t.bg};--p-title:${t.title};--p-font:${t.font};--p-weight:${t.weight};--p-style:${t.style || 'normal'};--fit:${fit};--fit-s:${fitS}`;
+  return `<div class="poster ${t.pos}${t.glow ? ' glow' : ''}${s.image ? ' has-img' : ''}" style="${style}">${coverHTML(s)}<div class="poster-title"><span class="poster-big">${esc(big)}</span>${small ? `<span class="poster-small">${esc(small)}</span>` : ''}</div></div>`;
+}
 
 /* ---------- metin işleme ---------- */
-const TAG_CUT = /<\s*\/?\s*(durum|se[cç]enek|defter)/i;
-function splitOutput(raw) {
-  raw = raw || '';
-  let stats = null, options = [];
-  const dm = raw.match(/<durum>([\s\S]*?)<\/durum>/i);
-  if (dm) stats = parseStats(dm[1]);
-  const om = raw.match(/<se[cç]enekler>([\s\S]*?)(<\/se[cç]enekler>|$)/i);
-  if (om) options = om[1].split('\n').map(l => l.replace(/^\s*([-*•]|\d+[.)])\s*/, '').trim()).filter(l => l && !l.startsWith('<')).slice(0, 4);
-  let visible = raw;
-  const cut = raw.search(TAG_CUT);
-  if (cut >= 0) visible = raw.slice(0, cut);
-  visible = visible.replace(/<[^>\n]{0,14}$/, '');
-  return { visible: visible.trim(), stats, options };
-}
-function parseStats(txt) {
-  const t = txt.trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
-  try { const j = JSON.parse(t); if (j && typeof j === 'object') return j; } catch {}
-  const o = {};
-  t.split('\n').forEach(l => { const m = l.match(/^\s*[-*"]?\s*([^:"]+)"?\s*:\s*(.+?),?\s*$/); if (m) o[m[1].trim()] = m[2].replace(/^"|"$/g, ''); });
-  return Object.keys(o).length ? o : null;
-}
 function md(text) {
   let t = esc(text);
   t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
@@ -134,15 +143,24 @@ function md(text) {
   t = t.replace(/\[([^\]\n]{2,140})\]/g, '<span class="sys">[$1]</span>');
   return t.split(/\n{2,}/).map(p => p.trim()).filter(Boolean).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
 }
-const cur = m => m.alts[m.ai] || '';
-const stripScenes = t => (t || '').replace(/<sahne>[\s\S]*?<\/sahne>\s*/gi, '').replace(/<sahne>[\s\S]*$/i, '').replace(/<\/?sahne>/gi, '');
-/** Hikaye metnini paragraflara böler; <sahne> tarifi olan paragrafa data-scene ekler */
-function storyHTML(text) {
+/** Sahne etiketini kullanılabilir görsel anahtarına çeviren işlev (bu oyuna ve bu andaki kartlara göre) */
+function sceneComposer(save, scen, cast) {
+  const anchor = visualAnchor(scen, save.messages);
+  const distant = keepsDistance(scen);
+  const names = [save.setup?.ad, scen.character].filter(Boolean);
+  return ({ text, kim }) => composeScene({ text, kim, cast, anchor, names, distant });
+}
+/** Hikaye metnini paragraflara böler; geçerli <sahne> tarifi olan paragrafa data-scene ekler */
+function storyHTML(text, compose) {
   let carry = null, out = '';
   (text || '').split(/\n{2,}/).forEach(par => {
     let scene = null;
-    par = par.replace(/<sahne>([\s\S]*?)<\/sahne>/gi, (_, x) => { scene = scene || x.trim(); return ''; });
-    par = par.replace(/<sahne>[\s\S]*$/i, '').replace(/<\/?sahne>/gi, '').trim();
+    par = par.replace(sceneTagRe(), (_, attr, body) => {
+      const key = compose ? compose(parseSceneTag(attr, body)) : null;
+      scene = scene || key;
+      return '';
+    });
+    par = stripScenes(par).trim();
     scene = scene || carry;
     if (!par) { carry = scene; return; }
     carry = null;
@@ -150,43 +168,6 @@ function storyHTML(text) {
     out += scene ? html.replace('<p>', `<p data-scene="${esc(scene)}">`) : html;
   });
   return out;
-}
-
-/* ---------- hikaye defteri ---------- */
-// Yapay zeka her cevabın sonunda <defter> bloğuyla kalıcı hafızayı günceller.
-// Defter, mesajlardan yeniden hesaplanır: yeniden yazma, geri alma ve sürüm değiştirme kendiliğinden tutarlı kalır.
-function parseDefter(raw) {
-  const m = (raw || '').match(/<defter>([\s\S]*?)(<\/defter>|$)/i);
-  if (!m) return [];
-  const ops = [];
-  m[1].split('\n').forEach(line => {
-    const l = line.trim().replace(/^[-*•]\s+(?=[+!?~x])/i, '');
-    let r;
-    if ((r = l.match(/^([+!?])\s*(.{3,})$/))) ops.push({ op: r[1], text: r[2].replace(/^\[?\d+\]\s*/, '').trim().slice(0, 240) });
-    else if ((r = l.match(/^x\s*\[?(\d+)\]?/i))) ops.push({ op: 'x', id: +r[1] });
-    else if ((r = l.match(/^~\s*\[?(\d+)\]?\s*[|:]\s*(.{3,})$/))) ops.push({ op: '~', id: +r[1], text: r[2].trim().slice(0, 240) });
-  });
-  return ops;
-}
-function ledgerOf(save, upto) {
-  const items = new Map();
-  let next = 1;
-  const msgs = save.messages.slice(0, upto ?? save.messages.length);
-  msgs.forEach((m, i) => {
-    if (m.role !== 'model') return;
-    parseDefter(cur(m)).forEach(o => {
-      if (o.op === 'x') items.delete(o.id);
-      else if (o.op === '~') { const it = items.get(o.id); if (it) it.text = o.text; }
-      else items.set(next, { id: next++, type: o.op === '+' ? 'fact' : o.op === '!' ? 'sonuc' : 'soru', text: o.text, turn: i });
-    });
-  });
-  return [...items.values()];
-}
-function ledgerText(items) {
-  if (!items.length) return '';
-  const part = (type, cap) => items.filter(x => x.type === type).slice(-cap).map(x => `[${x.id}] ${x.text}`).join('\n');
-  const f = part('fact', 90), s = part('sonuc', 40), q = part('soru', 30);
-  return [f && `Gerçekler:\n${f}`, s && `Bekleyen sonuçlar (zamanı gelince hikayede tetikle):\n${s}`, q && `Açık meseleler:\n${q}`].filter(Boolean).join('\n\n');
 }
 
 /* ---------- yapay zeka talimatı ---------- */
@@ -222,21 +203,73 @@ const BASE_RULES = `Sen "Diyar" adlı interaktif bir hikaye oyununun anlatıcıs
 - 18 yaşından küçük karakterlerle (lise ve okul öğrencileri dahil) hiçbir romantik ya da cinsel içerik yazma; bu karakterlerle ilişkiler arkadaşlık, rekabet, aile ve macera üzerinden yürür. Oyuncu zorlasa bile hikayeyi doğal biçimde başka yöne çevir.
 - Gerçek tarihteki soykırımları ve savaş suçlarını yüceltme ya da ödüllendirme.`;
 
+// Dakikalık jeton sınırı düşük servisler için aynı kuralların kısa hali
+const COMPACT_RULES = `Sen "Diyar" adlı interaktif hikaye oyununun anlatıcısı ve oyun yöneticisisin. Yalnızca Türkçe yaz (özel isimler orijinal kalır).
+
+Süreklilik: Hikaye defteri, hikaye özeti, hatırlanan sahneler ve oyuncunun notları kesin gerçektir; asla çelişme. İsimler, yaralar, eşyalar, sözler, yer ve zaman tutarlı kalsın. Karakterler yalnızca gördüklerini ve kendilerine söyleneni bilir.
+Neden-sonuç: Önemli eylemlerin hem hemen hem gecikmeli sonucu olur; gecikmeli olanı deftere "!" ile yaz ve zamanı gelince hatırlatılmadan gerçekleştir. Başarı emek ister, oyuncuyu kayırma. Dünya oyuncudan bağımsız işler.
+Karakterler: Yan karakterlerin kendi istekleri ve konuşma biçimi var; oyuncunun her dediğini kabul etmezler. Oyuncunun karakteri adına konuşma, düşünme ya da karar verme.
+Yazım: Somut, özgün ayrıntılar kullan; klişelerden ve kendi önceki cümlelerini tekrar etmekten kaçın. Cevabı özetleyerek ya da "ne yapacaksın?" diye sorarak bitirme. Diyaloglar tırnak içinde. Oyuncu "(OOC: ...)" yazarsa kısaca oyun yöneticisi olarak cevap ver.
+Sınırlar: Gereksiz vahşet yok. Romantizm yalnızca yetişkinler arasında ve müstehcen olmadan. 18 yaşından küçük karakterlerle hiçbir romantik ya da cinsel içerik yazma. Soykırım ve savaş suçlarını yüceltme.`;
+
 const LENGTH = {
   kisa: 'Cevapların kısa olsun: 1-2 paragraf.',
   orta: 'Cevapların orta uzunlukta olsun: 2-4 paragraf.',
   uzun: 'Cevapların uzun ve ayrıntılı olsun: 4-7 paragraf.',
 };
+const OUTPUT_TOKENS = { kisa: 1000, orta: 1600, uzun: 2800 };
+
+// Görsellerde kullanılmak üzere her senaryoda sorulan isteğe bağlı alan
+const LOOK_FIELD = { id: 'gorunum', label: 'Karakterinin görünüşü (isteğe bağlı, görsellerde kullanılır)', type: 'text', placeholder: 'Örneğin: uzun boylu, kızıl saçlı, sol yanağında yara izi, siyah pelerin' };
+const setupFields = scen => (scen.mode === 'ulke' ? (scen.setup || []) : [...(scen.setup || []), LOOK_FIELD]);
 
 function setupLines(save, scen) {
-  return (scen.setup || []).map(f => {
+  return setupFields(scen).map(f => {
     const v = (save.setup?.[f.id] || '').trim();
     return v ? `- ${f.label}: ${v}` : null;
   }).filter(Boolean).join('\n');
 }
 
-function buildSystem(save, scen, upto) {
-  const parts = [BASE_RULES];
+function budgetNow(scale = 1) {
+  const provider = settings.provider, model = settings.models[provider] || '';
+  const ctx = (settings.modelLists[provider] || []).find(m => m.id === model)?.ctx || 0;
+  return contextBudget({ provider, model, ctx, scale });
+}
+
+/** Görsel yönetmenlik talimatı */
+function imageRules(scen) {
+  const max = (settings.keys.pollinations || '').trim() ? 3 : 2;
+  const anchor = visualAnchor(scen, []);
+  return `\n- Görsel yönetmenlik: Sen metni yazarken ekranın arka planında gerçek zamanlı görsel üretiliyor ve görsel senin ilk etiketinle başlıyor. Bu yüzden cevabın HER ZAMAN şu etiketlerle başlasın, hikaye metni sonra gelsin:
+  1. Kart: Bu karede görünecek ve aşağıdaki listede kartı olmayan her karakter için (oyuncunun karakteri dahil) bir kez <karakter>Ad | English look</karakter>. Görünüş 10-18 İngilizce kelime: cinsiyet, yaş, ten, saç, ayırt edici iz, kıyafet. Oyuncu görünüşünü söylediyse ona sadık kal. Kartı sonradan değiştirme; yalnızca kalıcı bir değişimde (yeni yara, yeni kıyafet) aynı adla yeniden yaz. Tanınan kurgusal karakterleri gerçek bir oyuncuya benzetmeden tarif et.
+  2. Sahne: <sahne kim="Ad">English description</sahne>. kim içine o karede gerçekten görünen karakterlerin adını yaz (en fazla 2, tercihen 1); kimse yoksa kim="" yaz.
+  Tarif 15-28 İngilizce kelime olsun ve kamera açısıyla başlasın (wide shot, medium shot, over-the-shoulder, low angle). O paragrafta GERÇEKTEN olan şeyi göster: nerede, kim ne yapıyor, ışık, hava. Metinde olmayan hiçbir şey ekleme. Karakterin görünüşünü tarifte tekrar etme, kart otomatik eklenir.
+  Yeni bir mekâna geçince ya da görsel olarak önemli bir an gelince o paragrafın başına yeni bir <sahne> koy; cevap başına en fazla ${max} sahne.
+  Tarifte Türkçe kelime, özel isim, film, kitap, dizi, marka ya da gerçek kişi adı ASLA olmasın. Çıplaklık, cinsel ima, kan ve vahşet yok; herkes tam giyimli. 18 yaşından küçük karakterler romantik ya da sugestif gösterilmez.${anchor ? '' : '\n  Bu dünyanın görsel kimliğini ilk cevabının başında bir kez, 10-15 İngilizce kelimeyle ver: <dunya>era, setting, clothing, color mood</dunya>.'}
+  Örnek başlangıç:
+  <karakter>Mira | woman in her 30s, olive skin, short black hair, scar across left brow, worn brown leather coat</karakter>
+  <sahne kim="Mira">medium shot, a woman leaning over a lantern-lit map table in a cramped stone cellar, rain streaking the small window behind her</sahne>`;
+}
+
+function castLines(cast, query) {
+  const list = [...cast.values()];
+  if (!list.length) return '';
+  const q = query.toLocaleLowerCase('tr');
+  const chosen = list.length <= 14 ? list : [...list.filter(c => q.includes(c.name.toLocaleLowerCase('tr'))), ...list.slice(-14)];
+  return [...new Set(chosen)].map(c => `- ${c.name}: ${c.look}`).join('\n');
+}
+
+/** Oyuncunun yazdıkları ve son cevaptaki adlar: alakalı anıları bulmak için */
+function memoryQuery(save, upto) {
+  const before = save.messages.slice(0, upto);
+  const lastUser = [...before].reverse().find(m => m.role === 'user' && m.text);
+  const lastModel = [...before].reverse().find(m => m.role === 'model');
+  const names = lastModel ? properNames(stripScenes(splitOutput(cur(lastModel)).visible)) : [];
+  return [lastUser?.text || '', ...names].join(' ');
+}
+
+function buildSystem(save, scen, upto, budget, query = '', recallBefore = save.sumUpTo || 0) {
+  const parts = [budget.compact ? COMPACT_RULES : BASE_RULES];
   if (scen.mode === 'karakter') {
     parts.push(`Bu bir karakter sohbeti. Sen ${scen.character || 'bu hikayenin ana karakteri'} olarak, onun ağzından birinci tekil şahısla konuşuyorsun. Jestleri ve ortamı kısa italik cümlelerle göster (*kadehini kaldırır*), ağırlık diyalogda olsun. Karakterden çıkma.`);
   } else if (scen.mode === 'ulke') {
@@ -247,20 +280,23 @@ function buildSystem(save, scen, upto) {
   parts.push(`## Senaryo: ${scen.title}\n${scen.world}`);
   const sl = setupLines(save, scen);
   if (sl) parts.push(`## Oyuncunun seçimleri\n${sl}`);
-  const lt = ledgerText(ledgerOf(save, upto));
+  const cast = castOf(save.messages, upto, save.castEdits);
+  const cl = castLines(cast, query);
+  if (cl) parts.push(`## Tanınan karakterler ve görünüşleri (kartı olanlara yeni kart yazma)\n${cl}`);
+  const lt = ledgerText(ledgerOf(save.messages, upto), { maxTokens: Math.floor(budget.total * 0.16), query });
   parts.push(`## Hikaye defteri (kalıcı hafıza)\n${lt || '(Henüz boş. İlk cevabından itibaren doldur.)'}`);
   if (save.summary?.trim()) parts.push(`## Şimdiye kadar olanlar (hikaye özeti)\n${save.summary.trim()}`);
+  const memories = recall({ messages: save.messages, before: Math.min(recallBefore, upto), query, maxTokens: Math.min(700, Math.floor(budget.total * 0.08)) });
+  if (memories.length) parts.push(`## Oyuncunun değindiği eski sahneler (birebir, gerçekten yaşandı; ayrıntıları bunlara uysun)\n${memories.map(x => `${x.who}: ${x.text}`).join('\n\n')}`);
   if (save.notes?.trim()) parts.push(`## Oyuncunun sabitlediği notlar (bunlara her zaman uy)\n${save.notes.trim()}`);
-  let fmt = `## Cevap biçimi\n- ${LENGTH[settings.length] || LENGTH.orta}\n- Hikaye metnini düz yaz; vurgu için **kalın** ve *italik* kullanabilirsin. Başlık ve madde listesi kullanma.`;
+  let fmt = `## Cevap biçimi\n- ${LENGTH[settings.length] || LENGTH.orta}\n- Yalnızca Türkçe yaz. Hikaye metnini düz yaz; vurgu için **kalın** ve *italik* kullanabilirsin. Başlık ve madde listesi kullanma.`;
   if (scen.stats?.length) {
     const keys = scen.stats.map(s => `"${s.k}": ${s.num ? '0-100 arası sayı' : (s.hint || 'kısa metin')}${s.num && s.hint ? ` (${s.hint})` : ''}`).join(', ');
     fmt += `\n- Hikaye metninden sonra güncel durumu tek satır JSON olarak ver: <durum>{...}</durum>. Anahtarlar: ${keys}. Değerleri hikayedeki olaylara göre gerçekçi biçimde güncelle; listeleri virgülle ayrılmış kısa metin olarak yaz.`;
   }
   fmt += `\n- En sonda oyuncunun yapabileceği 3 kısa ve birbirinden farklı eylem öner (her biri en fazla 12 kelime):\n<secenekler>\n- ...\n- ...\n- ...\n</secenekler>`;
   fmt += `\n- Her cevabın en sonuna hikaye defterini güncelleyen kısa bir blok ekle. Her satır tek bir şeydir ve şunlardan biriyle başlar:\n  + metin : ileride önem taşıyacak yeni bir gerçek (tanışılan karakter ve ilişkisi, verilen söz, borç, yara, bulunan eşya, alınan karar, öğrenilen sır, ölüm, yer ve zaman)\n  ! metin : oyuncunun eyleminin ya da dünyadaki bir gelişmenin gecikmeli sonucu, ne olacağı ve yaklaşık ne zaman olacağıyla (ör. "! Yenilen komutan 2 hafta içinde intikam için baskın düzenleyecek")\n  ? metin : çözülmemiş bir gizem, görev ya da soru\n  x numara : defterdeki bir maddenin artık geçersiz ya da gerçekleşmiş olması (ör. "x 7")\n  ~ numara | yeni metin : bir maddeyi güncelle\n  Sadece değişenleri yaz (en fazla 5 satır), kısa tut, tekrar etme. Zamanı gelip hikayede gerçekleşen "!" maddelerini "x" ile kapat. Blok oyuncuya gösterilmez.\n<defter>\n+ ...\n</defter>`;
-  if (settings.images) {
-    fmt += `\n- Görsel sahneler: Oyuncunun ekranının arka planında, anlattığın sahneye göre görsel üretiliyor. Yeni bir mekâna geçildiğinde ya da sahnede önemli bir görsel değişiklik olduğunda, o paragrafın EN BAŞINA İngilizce kısa bir görsel tarifi koy: <sahne>...</sahne>. İlk paragrafa mutlaka bir tane koy; cevap başına en fazla 3 tane. Tarif 15-35 kelime olsun: mekân, zaman, ışık, hava, renkler, önemli nesneler ve kamera açısı (wide shot, close-up, low angle). İnsanlar yalnızca isimsiz figürler olarak geçsin (uzaktan, arkadan ya da silüet; yüzleri seçilmesin). Tarifte ASLA karakter, film, dizi, kitap, oyun, marka, ünlü ya da gerçek kişi adı yazma. Çıplaklık, kan ve vahşet yok. Örnek: <sahne>wide shot of a rain-soaked small-town high school hallway, green lockers, fluorescent light, wet footprints on the floor, grey daylight through tall windows</sahne>`;
-  }
+  if (settings.images) fmt += imageRules(scen);
   parts.push(fmt);
   return parts.join('\n\n');
 }
@@ -270,32 +306,73 @@ function kickoffText(save, scen) {
   return `[Oyun başlıyor]${sl ? '\n' + sl : ''}\n\n${scen.openingPrompt || 'Açılış sahnesini yaz ve oyuncuyu hikayenin içine al.'}`;
 }
 
-function buildHistory(save, scen, uptoIdx) {
-  const msgs = save.messages.slice(save.sumUpTo || 0, uptoIdx);
-  const kick = (save.sumUpTo || 0) > 0
-    ? '[Hikaye, sistem talimatındaki özetin bittiği yerden devam ediyor. Kaldığın yerden sürdür.]'
-    : kickoffText(save, scen);
-  const h = [{ role: 'user', text: kick }];
+/** Bir mesajın modele gönderilecek hali */
+function historyText(m, keepStats) {
+  if (m.role !== 'model') return m.cont ? '(Oyuncu şimdilik bir şey yapmıyor. Hikayeyi biraz ilerlet ama oyuncu adına karar verme.)' : (m.text || '');
+  let text = cur(m).replace(/<se[cç]enekler>[\s\S]*?(<\/se[cç]enekler>|$)/gi, '').replace(/<defter>[\s\S]*?(<\/defter>|$)/gi, '');
+  text = stripScenes(text);
+  if (!keepStats) text = text.replace(/<durum>[\s\S]*?<\/durum>/gi, '');
+  return text.trim();
+}
+
+/** Bağlam: özet + (gerekirse kısaltılmış eski olaylar) + bütçeye sığan son mesajlar.
+ *  overflowFrom: birebir gönderilmeyen ilk mesajın konumu; eski sahne hatırlama buna göre çalışır. */
+function buildHistory(save, scen, uptoIdx, budget, systemTokens) {
+  const start = Math.min(save.sumUpTo || 0, uptoIdx);
+  const msgs = save.messages.slice(start, uptoIdx);
   let lastModel = -1;
   msgs.forEach((m, i) => { if (m.role === 'model') lastModel = i; });
-  msgs.forEach((m, i) => {
-    let text;
-    if (m.role === 'model') {
-      text = cur(m).replace(/<se[cç]enekler>[\s\S]*?(<\/se[cç]enekler>|$)/gi, '').replace(/<defter>[\s\S]*?(<\/defter>|$)/gi, '');
-      text = stripScenes(text);
-      if (i !== lastModel) text = text.replace(/<durum>[\s\S]*?<\/durum>/gi, '');
-      text = text.trim();
-    } else {
-      text = m.cont ? '(Oyuncu şimdilik bir şey yapmıyor. Hikayeyi biraz ilerlet ama oyuncu adına karar verme.)' : m.text;
-    }
-    if (!text) return;
-    const role = m.role === 'model' ? 'model' : 'user';
+  const entries = msgs.map((m, i) => ({ i: start + i, role: m.role === 'model' ? 'model' : 'user', text: historyText(m, i === lastModel) })).filter(e => e.text);
+
+  const room = Math.max(1200, budget.total - systemTokens - 250);
+  let { kept, overflow } = fitHistory(entries, room);
+  let recap = '';
+  if (overflow.length) {
+    // Sığmayanlar özete geçene kadar kısaltılmış olarak gönderilir, sessizce kaybolmaz
+    ({ kept, overflow } = fitHistory(entries, room * 0.8));
+    recap = compactOverflow(overflow, Math.floor(room * 0.18));
+  }
+  let kick = start > 0
+    ? '[Hikaye, sistem talimatındaki özetin bittiği yerden devam ediyor. Kaldığın yerden sürdür.]'
+    : kickoffText(save, scen);
+  if (recap) kick += `\n\n[Özetle son mesajlar arasında kalan olaylar, kısaltılmış. Bunlar da yaşandı:]\n${recap}`;
+  const h = [{ role: 'user', text: kick }];
+  kept.forEach(e => {
     const last = h[h.length - 1];
-    if (last.role === role) last.text += '\n\n' + text; else h.push({ role, text });
+    if (last.role === e.role) last.text += '\n\n' + e.text; else h.push({ role: e.role, text: e.text });
   });
   const lastH = h[h.length - 1];
-  if (lastH.role === 'user') lastH.text += '\n\n[Anlatıcı notu, oyuncuya gösterilmez: Cevap yazmadan önce hikaye defterindeki gerçekleri ve bekleyen sonuçları kontrol et; zamanı gelmiş olanı tetikle. Oyuncu adına konuşma ya da karar verme. Önceki cevaplarındaki kalıpları ve betimlemeleri tekrar etme. Cevabın sonunda sırasıyla <durum>, <secenekler> ve <defter> bloklarını ver.' + (settings.images ? ' Yeni mekân ya da görsel an olan paragrafların başına <sahne>İngilizce görsel tarifi</sahne> koy.' : '') + ']';
-  return h;
+  if (lastH.role === 'user') lastH.text += '\n\n[Anlatıcı notu, oyuncuya gösterilmez: Yalnızca Türkçe yaz. Cevap yazmadan önce defterdeki gerçekleri, özeti ve bekleyen sonuçları kontrol et; zamanı gelmiş olanı tetikle. Daha önce olan hiçbir şeyle çelişme. Oyuncu adına konuşma ya da karar verme. Önceki cevaplarındaki kalıpları tekrar etme. ' + (settings.images ? 'Cevaba gerekirse <karakter> kartlarıyla, ardından İngilizce <sahne kim="..."> etiketiyle başla. ' : '') + 'Cevabın sonunda sırasıyla <durum>, <secenekler> ve <defter> bloklarını ver.]';
+  return { history: h, firstKept: kept.length ? kept[0].i : uptoIdx };
+}
+
+/** Sistem talimatı ile geçmişi birlikte hazırlar: eski sahne hatırlama, bağlama girmeyen mesajlara bakar */
+function buildContext(save, scen, idx, scale) {
+  const budget = budgetNow(scale);
+  const query = memoryQuery(save, idx);
+  let system = buildSystem(save, scen, idx, budget, query);
+  const { history, firstKept } = buildHistory(save, scen, idx, budget, approxTokens(system));
+  if (firstKept > (save.sumUpTo || 0)) system = buildSystem(save, scen, idx, budget, query, firstKept);
+  return { system, history, budget };
+}
+
+/* ---------- onay penceresi ---------- */
+function ask(msg, { ok = 'Evet', cancel = 'Vazgeç', danger = false, input = null } = {}) {
+  return new Promise(res => {
+    const d = document.createElement('dialog');
+    d.className = 'ask';
+    // Enter ilk düğmeyi çalıştırır: onay düğmesi önce gelir, görselde sağa dizilir
+    d.innerHTML = `<form method="dialog"><p>${esc(msg)}</p>${input !== null ? `<input value="${esc(input)}" maxlength="60" aria-label="${esc(msg)}">` : ''}<div class="row"><button class="btn ${danger ? 'danger-fill' : 'primary'}" value="yes">${esc(ok)}</button><button class="btn" value="no" ${danger ? 'autofocus' : ''}>${esc(cancel)}</button></div></form>`;
+    document.body.appendChild(d);
+    d.addEventListener('close', () => {
+      const yes = d.returnValue === 'yes';
+      const v = d.querySelector('input')?.value;
+      d.remove();
+      res(input !== null ? (yes ? v : null) : yes);
+    });
+    d.showModal();
+    d.querySelector('input')?.select();
+  });
 }
 
 /* ---------- modal ---------- */
@@ -304,14 +381,13 @@ function openModal(html, cls = '', onClose) {
   closeModal(true);
   const back = document.createElement('div');
   back.className = 'modal-back';
-  back.innerHTML = `<div class="modal ${cls}" role="dialog" aria-modal="true">${html}</div>`;
+  back.innerHTML = `<div class="modal ${cls}" role="dialog" aria-modal="true" tabindex="-1">${html}</div>`;
   document.body.appendChild(back);
   document.body.classList.add('noscroll');
   back.addEventListener('mousedown', e => { if (e.target === back) closeModal(); });
   modalClose = onClose || null;
   requestAnimationFrame(() => back.classList.add('in'));
-  const focusable = $('input:not([type=hidden]), select, textarea, button', back);
-  setTimeout(() => focusable?.focus({ preventScroll: true }), 30);
+  setTimeout(() => $('.modal', back)?.focus({ preventScroll: true }), 30);
   return back;
 }
 function closeModal(silent) {
@@ -326,13 +402,21 @@ function closeModal(silent) {
 /* ---------- yönlendirme ---------- */
 let view = '';
 let P = null; // aktif oyun
+let vtSource = null; // tıklanan afiş
+document.addEventListener('click', e => { const c = e.target.closest?.('a.card[href^="#/senaryo"]'); vtSource = c ? c.querySelector('.poster') : null; }, true);
+function openWithTransition(fn) {
+  const src = vtSource; vtSource = null;
+  if (!src || !document.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) return fn();
+  src.style.viewTransitionName = 'poster';
+  document.startViewTransition(() => { src.style.viewTransitionName = ''; fn(); });
+}
 
 function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
   if (parts[0] === 'oyna' && parts[1]) { closeModal(true); return renderPlay(parts[1]); }
   if (parts[0] === 'olustur') { closeModal(true); return renderCreator(parts[1]); }
   if (view !== 'home') renderHome();
-  if (parts[0] === 'senaryo' && parts[1]) openScenario(parts[1]);
+  if (parts[0] === 'senaryo' && parts[1]) openWithTransition(() => openScenario(parts[1]));
   else closeModal(true);
 }
 function leavePlay() {
@@ -346,59 +430,79 @@ const homeState = { cat: 'Tümü', q: '' };
 
 function topbar(extra = '') {
   return `<header class="topbar">
-    <a class="brand" href="#/" aria-label="Diyar ana sayfa"><span class="brand-mark" aria-hidden="true"></span>Diyar</a>
+    <a class="brand" href="#/" aria-label="Diyar ana sayfa">Diyar</a>
     ${extra}
     <div class="topbar-actions">
-      <a class="btn ghost" href="#/olustur">${I.plus}<span>Senaryo oluştur</span></a>
-      <button class="icon-btn" data-act="settings" aria-label="Ayarlar" title="Ayarlar">${I.gear}</button>
+      <a class="top-link" href="#/olustur" aria-label="Kendi dünyanı yaz">${I.plus}<span>Kendi dünyanı yaz</span></a>
+      <button class="top-link" data-act="settings" aria-label="Ayarlar">${I.gear}<span>Ayarlar</span></button>
     </div>
   </header>`;
+}
+
+/** Oyuncunun kaldığı yeri hatırlatan son satırlar */
+function lastLines(save) {
+  for (let i = (save?.messages || []).length - 1; i >= 0; i--) {
+    const m = save.messages[i];
+    if (m.role !== 'model') continue;
+    const text = stripScenes(splitOutput(cur(m)).visible).replace(/\*+/g, '').trim();
+    if (!text) continue;
+    const par = text.split(/\n{2,}/).pop().trim();
+    if (par.length <= 240) return par;
+    const tail = par.slice(-240);
+    const cut = tail.search(/[.!?…]["”]?\s/);
+    return '…' + (cut >= 0 ? tail.slice(cut + 1) : tail).trim();
+  }
+  return '';
 }
 
 function renderHome() {
   leavePlay();
   view = 'home';
-  document.title = 'Diyar — hikaye oyunları';
+  document.title = 'Diyar — Türkçe rol yapma ve hikaye oyunları';
   const saves = savesIndex();
   const last = saves[0];
-  const lastScen = last && getScenario(last.scenarioId, loadSave(last.id));
-  const featured = lastScen || SCENARIOS[0];
-  const heroAction = lastScen
-    ? `<a class="btn primary big" href="#/oyna/${esc(last.id)}">Kaldığın yerden devam et</a><span class="hero-meta">${esc(last.label || '')}${last.turns ? `, ${last.turns} tur` : ''}, ${timeAgo(last.updatedAt)}</span>`
-    : `<a class="btn primary big" href="#/senaryo/${esc(featured.id)}">Bu dünyaya gir</a><span class="hero-meta">${modeLabel(featured.mode)} modu</span>`;
+  const lastSave = last && loadSave(last.id);
+  const lastScen = last && getScenario(last.scenarioId, lastSave);
   const cats = ['Tümü', ...CATEGORIES.filter(c => allScenarios().some(s => (s.tags || []).includes(c)))];
   if (customs().length) cats.push('Benim senaryolarım');
 
   app.innerHTML = `
   <div class="home">
     ${topbar(`<label class="search">${I.search}<input type="search" id="q" placeholder="Dünya, karakter ya da konu ara" value="${esc(homeState.q)}" aria-label="Senaryo ara"></label>`)}
-    ${!hasKey() ? `<div class="key-banner"><div><strong>Başlamadan önce:</strong> Diyar, ücretsiz bir Google Gemini anahtarıyla çalışır. Almak bir dakika sürer.</div><button class="btn primary" data-act="settings">Anahtarı ekle</button></div>` : ''}
-    <section class="hero">
-      <div class="hero-art">${coverHTML(featured)}</div>
-      <div class="hero-text">
-        <p class="hero-kicker">${lastScen ? 'Son oynadığın' : 'Bu haftanın dünyası'}</p>
-        <h1>${esc(featured.title)}</h1>
-        <p class="hero-sub">${esc(featured.subtitle)}</p>
-        <div class="hero-cta">${heroAction}</div>
+    ${!hasKey() ? `<div class="key-strip"><span>Diyar, ücretsiz bir Google Gemini anahtarıyla çalışır. Almak bir dakika sürer.</span><button data-act="settings">Anahtarı ekle</button></div>` : ''}
+    <header class="mast" id="mast">
+      <h1 class="mast-word">Diyar</h1>
+      <div class="mast-say">
+        <p class="mast-line">Bir cümle yaz, dünya cevap versin.</p>
+        <p class="mast-sub">Diyar, yapay zekayla Türkçe oynanan bir rol yapma sitesi. Hazır bir dünya seç ya da kendininkini yaz. Verdiğin sözü de kazandığın düşmanı da hikaye unutmaz.</p>
+        <div class="mast-cta"><button class="btn primary big" data-act="to-wall">Bir dünya seç</button><a class="btn ghost" href="#/olustur">Kendi dünyanı yaz</a></div>
       </div>
-    </section>
-    <nav class="chips" aria-label="Kategoriler">
+    </header>
+    ${lastScen ? `<a class="bookmark" href="#/oyna/${esc(last.id)}" style="${worldVars(lastScen)}">
+      <div><p class="bookmark-where">Kaldığın yer: ${esc(lastScen.title)}${last.label ? ', ' + esc(last.label) : ''}, ${timeAgo(last.updatedAt)}</p>
+      <p class="bookmark-text">${esc(lastLines(lastSave) || lastScen.subtitle)}</p></div>
+      <span class="btn">Devam et</span></a>` : ''}
+    <nav class="index" id="wall-top" aria-label="Türler">
       ${cats.map(c => `<button class="chip ${c === homeState.cat ? 'on' : ''}" data-act="cat" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}
     </nav>
     <div id="shelves"></div>
     <footer class="foot">
-      <p>Oyunların ve senaryoların bu tarayıcıda saklanır. Başka bir cihaza geçerken <button class="linklike" data-act="settings">Ayarlar</button> bölümünden yedeğini al.</p>
+      <p>Oyunların ve senaryoların yalnızca bu tarayıcıda saklanır. Başka bir cihaza geçerken <button class="linklike" data-act="settings">Ayarlar</button> bölümünden yedeğini al.</p>
+      <p>Fandom dünyaları hayranların oynaması için yazıldı. Diyar'ın bu eserlerin sahipleriyle bir bağı yok.</p>
     </footer>
   </div>`;
   $('#q').addEventListener('input', debounce(e => { homeState.q = e.target.value.trim(); renderShelves(); }, 150));
+  const bar = $('.topbar'), mast = $('#mast');
+  if (bar && mast && 'IntersectionObserver' in window) {
+    new IntersectionObserver(([en]) => bar.classList.toggle('past', !en.isIntersecting), { rootMargin: '-120px 0px 0px' }).observe(mast);
+  }
   renderShelves();
 }
 
-function scenCard(s) {
-  return `<a class="card" href="#/senaryo/${esc(s.id)}">
-    <div class="cover">${coverHTML(s)}<span class="badge">${modeLabel(s.mode)}</span></div>
-    <h3>${esc(s.title)}</h3>
-    <p>${esc(s.subtitle)}</p>
+function scenCard(s, big = false) {
+  return `<a class="card ${big ? 'big' : ''}" href="#/senaryo/${esc(s.id)}">
+    ${posterHTML(s)}
+    <div class="card-meta"><span class="card-mode">${modeLabel(s.mode)}</span><span class="card-sub">${esc(s.subtitle)}</span></div>
   </a>`;
 }
 function saveCard(x) {
@@ -406,27 +510,41 @@ function saveCard(x) {
   const s = getScenario(x.scenarioId, save);
   if (!s) return '';
   return `<a class="card save" href="#/oyna/${esc(x.id)}">
-    <div class="cover">${coverHTML(s)}<span class="badge">${x.turns || 0} tur</span></div>
-    <h3>${esc(s.title)}</h3>
-    <p>${esc(x.label || '')}${x.label ? ', ' : ''}${timeAgo(x.updatedAt)}</p>
+    ${posterHTML(s)}
+    <div class="card-meta"><span class="card-mode">${x.turns || 0} tur</span><span class="card-sub">${esc(x.label || '')}${x.label ? ', ' : ''}${timeAgo(x.updatedAt)}</span></div>
   </a>`;
 }
-const createCard = () => `<a class="card create" href="#/olustur"><div class="cover create-cover">${I.plus}<span>Kendi dünyanı yaz</span></div><h3>Yeni senaryo</h3><p>Dünyanı, karakterlerini ve açılış sahneni sen belirle.</p></a>`;
+const createCard = () => `<a class="card create" href="#/olustur">
+    <div class="poster create-poster"><span class="create-mark">${I.plus}</span><b>Kendi dünyanı yaz</b></div>
+    <div class="card-meta"><span class="card-mode">Senaryo oluştur</span><span class="card-sub">Dünyanı, karakterlerini ve açılış sahneni sen belirle.</span></div>
+  </a>`;
+
+// Oyunun nasıl aktığını anlatmak yerine göster
+const SPECIMEN = `<aside class="specimen" aria-label="Örnek oyun metni">
+    <p class="specimen-label">Oyun böyle akar. Örnek metin, Salgın: İstanbul</p>
+    <p>Karaköy'de tramvay raylarının üstünde bir otobüs yan yatmış, kapısı gökyüzüne bakıyor. Eczanenin kepengi yarıya kadar inik. İçeride biri öksürüyor, sonra öksürük kesiliyor, sonra bir raf devriliyor.</p>
+    <p class="you">Kepengin altından feneri uzatıyorum ama girmiyorum. "Kim var orada?"</p>
+    <p>Işık, yere saçılmış antibiyotik kutularının üstünde duruyor. <q>"Feneri indir,"</q> diyor bir kadın, sesi beklediğinden yakın. <q>"Seni ısırdılar mı, önce onu söyle. Sonra konuşuruz."</q></p>
+  </aside>`;
 
 function renderShelves() {
   const el = $('#shelves'); if (!el) return;
   const q = homeState.q.toLocaleLowerCase('tr');
   const cat = homeState.cat;
   if (cat === 'Tümü' && !q) {
-    const saves = savesIndex().slice(0, 8);
+    const others = savesIndex().slice(1, 9);
     const mine = customs();
     let html = '';
-    if (saves.length) html += shelf('Kaldığın yerden devam et', '', saves.map(saveCard).join(''), 'row');
+    if (others.length) html += shelf('Diğer oyunların', '', others.map(saveCard).join(''));
     SHELVES.forEach(sh => {
       const list = SCENARIOS.filter(s => s.shelf === sh.id);
-      if (list.length) html += shelf(sh.title, sh.hint, list.map(scenCard).join(''));
+      if (!list.length) return;
+      const lead = list.length >= 5;
+      const cards = list.map((s, i) => scenCard(s, lead && i === 0)).join('');
+      const extra = sh.id === 'tarih' ? SPECIMEN : sh.id === 'ozgun' ? createCard() : '';
+      html += shelf(sh.title, sh.hint, cards + extra, `${lead ? 'lead' : ''} ${sh.id}`);
     });
-    html += shelf('Senin senaryoların', mine.length ? '' : 'Henüz yok. İlkini yazmak birkaç dakika sürer.', mine.map(scenCard).join('') + createCard());
+    if (mine.length) html += shelf('Senin senaryoların', '', mine.map(s => scenCard(s)).join(''));
     el.innerHTML = html;
     return;
   }
@@ -435,11 +553,11 @@ function renderShelves() {
   else if (cat !== 'Tümü') list = list.filter(s => (s.tags || []).includes(cat));
   if (q) list = list.filter(s => [s.title, s.subtitle, s.description, ...(s.tags || [])].join(' ').toLocaleLowerCase('tr').includes(q));
   el.innerHTML = list.length
-    ? shelf(`${list.length} senaryo`, '', list.map(scenCard).join(''))
-    : `<div class="empty"><p>Bu aramaya uyan bir senaryo yok.</p><a class="btn" href="#/olustur">Bu dünyayı kendin yaz</a></div>`;
+    ? shelf(q ? `“${esc(homeState.q)}”` : esc(cat), `${list.length} dünya`, list.map(s => scenCard(s)).join(''))
+    : `<div class="empty"><p>Bu aramaya uyan bir dünya yok. Belki de yazılmayı bekliyordur.</p><a class="btn" href="#/olustur">Bu dünyayı kendin yaz</a></div>`;
 }
-function shelf(title, hint, cards, kind = 'grid') {
-  return `<section class="shelf"><div class="shelf-head"><h2>${esc(title)}</h2>${hint ? `<p>${esc(hint)}</p>` : ''}</div><div class="${kind === 'row' ? 'row-scroll' : 'grid'}">${cards}</div></section>`;
+function shelf(title, hint, cards, cls = '') {
+  return `<section class="wall-sec ${cls}"><div class="wall"><header class="wall-head"><h2>${title}</h2>${hint ? `<p>${esc(hint)}</p>` : ''}</header>${cards}</div></section>`;
 }
 
 /* ---------- senaryo detayı ---------- */
@@ -448,7 +566,7 @@ function openScenario(id) {
   if (!s) { toast('Senaryo bulunamadı.'); location.hash = '#/'; return; }
   const saves = savesIndex().filter(x => x.scenarioId === id);
   const isCustom = customs().some(c => c.id === id);
-  const fields = (s.setup || []).map(f => {
+  const fields = setupFields(s).map(f => {
     const req = f.required ? 'required' : '';
     if (f.type === 'select') {
       return `<label class="field"><span>${esc(f.label)}</span><select name="${esc(f.id)}" data-custom="${f.allowCustom ? 1 : 0}">${f.options.map(o => `<option>${esc(o)}</option>`).join('')}${f.allowCustom ? '<option value="__diger">Diğer (kendim yazacağım)</option>' : ''}</select>
@@ -457,19 +575,23 @@ function openScenario(id) {
     return `<label class="field"><span>${esc(f.label)}</span><input name="${esc(f.id)}" placeholder="${esc(f.placeholder || '')}" ${req} maxlength="160"></label>`;
   }).join('');
   const back = openModal(`
-    <div class="scen-cover">${coverHTML(s)}<button class="icon-btn modal-x" data-act="close-modal" aria-label="Kapat">${I.close}</button></div>
+    <div class="sheet-art">${posterHTML(s)}</div>
+    <button class="icon-btn sheet-x" data-act="close-modal" aria-label="Kapat" title="Kapat">${I.close}</button>
     <div class="scen-body">
-      <p class="scen-tags">${modeLabel(s.mode)} modu${(s.tags || []).length ? ', ' + esc(s.tags.slice(0, 4).join(', ')) : ''}</p>
-      <h2>${esc(s.title)}</h2>
-      <p class="scen-desc">${esc(s.description || s.subtitle)}</p>
+      <p class="scen-tags">${modeLabel(s.mode)}${(s.tags || []).length ? ' · ' + esc(s.tags.slice(0, 4).join(', ')) : ''}</p>
+      <h2>${esc(s.subtitle)}</h2>
+      ${s.description ? `<p class="scen-desc">${esc(s.description)}</p>` : ''}
       ${saves.length ? `<div class="scen-saves"><h3>Bu dünyadaki oyunların</h3>${saves.map(x => `<div class="save-row"><a href="#/oyna/${esc(x.id)}"><strong>${esc(x.label || 'Oyun')}</strong><span>${x.turns || 0} tur, ${timeAgo(x.updatedAt)}</span></a><button class="icon-btn sm" data-act="del-save" data-id="${esc(x.id)}" aria-label="Oyunu sil" title="Oyunu sil">${I.trash}</button></div>`).join('')}</div>` : ''}
       <form class="setup" id="setup-form">
         <h3>${saves.length ? 'Yeni bir oyun başlat' : 'Oyuna hazırlan'}</h3>
         ${fields}
         <button class="btn primary big" type="submit">Oyuna başla</button>
       </form>
-      ${isCustom ? `<div class="scen-own"><a class="btn ghost" href="#/olustur/${esc(s.id)}">${I.edit}<span>Senaryoyu düzenle</span></a><button class="btn ghost danger" data-act="del-scen" data-id="${esc(s.id)}">${I.trash}<span>Senaryoyu sil</span></button></div>` : ''}
+      ${isCustom ? `<div class="scen-own"><a class="btn ghost" href="#/olustur/${esc(s.id)}">Senaryoyu düzenle</a><button class="btn ghost danger" data-act="del-scen" data-id="${esc(s.id)}">Senaryoyu sil</button></div>` : ''}
     </div>`, 'scen-modal', () => { if (location.hash.startsWith('#/senaryo')) location.hash = '#/'; });
+  const sheet = $('.scen-modal', back);
+  sheet.style.cssText = worldVars(s);
+  sheet.setAttribute('aria-label', s.title);
   $$('select[data-custom="1"]', back).forEach(sel => sel.addEventListener('change', () => {
     const inp = sel.parentElement.querySelector('.custom-in');
     inp.hidden = sel.value !== '__diger'; if (!inp.hidden) inp.focus();
@@ -478,7 +600,7 @@ function openScenario(id) {
     e.preventDefault();
     const fd = new FormData(e.target);
     const setup = {};
-    (s.setup || []).forEach(f => {
+    setupFields(s).forEach(f => {
       let v = (fd.get(f.id) || '').toString().trim();
       if (v === '__diger') v = (fd.get(f.id + '__c') || '').toString().trim();
       setup[f.id] = v;
@@ -510,31 +632,33 @@ function renderPlay(id) {
   view = 'play';
   P = { save, scen, busy: false, ctrl: null, error: null, summarizing: false };
   document.title = `${scen.title} — Diyar`;
-  const wide = window.matchMedia('(min-width: 1100px)').matches;
+  const wide = window.matchMedia('(min-width: 1360px)').matches;
   app.innerHTML = `
-  <div class="play ${wide ? 'panel-open' : ''}">
-    <header class="play-top">
-      <a class="icon-btn" href="#/" aria-label="Ana sayfa" title="Ana sayfa">${I.back}</a>
-      <div class="play-title"><strong>${esc(scen.title)}</strong><span id="save-label">${esc(save.label)}</span></div>
-      <button class="icon-btn" data-act="settings" aria-label="Ayarlar" title="Ayarlar">${I.gear}</button>
-      <button class="icon-btn" data-act="toggle-panel" aria-label="Durum ve hafıza paneli" title="Durum ve hafıza">${I.panel}</button>
-    </header>
-    <div class="play-body">
-      <div class="stage">
-        <div class="scene-bg" id="scene-bg" aria-hidden="true" ${settings.images ? '' : 'hidden'}><div class="layer"></div><div class="layer"></div><div class="shade"></div></div>
-        <div class="scene-status" id="scene-status" hidden>Sahne görseli hazırlanıyor</div>
-        <main class="story-wrap" id="story-wrap"><div class="story" id="story"></div></main>
-      </div>
-      <aside class="panel" id="panel" aria-label="Durum ve hafıza"></aside>
+  <div class="play ${wide ? 'panel-open' : ''}" style="${worldVars(scen)}">
+    <aside class="plate" id="plate" data-act="toggle-plate">
+      <div class="scene-bg" id="scene-bg" aria-hidden="true"><div class="layer"></div><div class="layer"></div></div>
+      <button type="button" class="scene-status" id="scene-status" data-act="scene-retry" hidden></button>
+      <div class="plate-cap"><strong>${esc(scen.title)}</strong><span id="save-label-2">${esc(save.label)}</span></div>
+    </aside>
+    <div class="read">
+      <header class="play-top">
+        <a class="top-text" href="#/" aria-label="Dünyalara dön" title="Dünyalara dön">${I.back}<span>Dünyalar</span></a>
+        <div class="play-title"><strong>${esc(scen.title)}</strong><span id="save-label">${esc(save.label)}</span></div>
+        <div class="play-spacer"></div>
+        <button class="top-text" data-act="toggle-panel" aria-label="Defter: durum ve hafıza" title="Durum ve hafıza">${I.panel}<span>Defter</span></button>
+        <button class="top-text" data-act="settings" aria-label="Ayarlar" title="Ayarlar">${I.gear}<span>Ayarlar</span></button>
+      </header>
+      <main class="story-wrap" id="story-wrap"><div class="story" id="story"></div></main>
+      <footer class="composer">
+        <div class="options" id="options"></div>
+        <form class="compose" id="compose">
+          <textarea id="input" rows="1" placeholder="Ne yapıyorsun?" aria-label="Eylemin"></textarea>
+          <button type="button" class="icon-btn" data-act="continue" title="Bir şey yapmadan hikayeyi ilerlet" aria-label="Hikayeyi ilerlet" style="width:46px;height:46px">${I.forward}</button>
+          <button type="submit" class="send" id="send" aria-label="Gönder">${I.send}</button>
+        </form>
+      </footer>
     </div>
-    <footer class="composer">
-      <div class="options" id="options"></div>
-      <form class="compose" id="compose">
-        <textarea id="input" rows="1" placeholder="Ne yapıyorsun?" aria-label="Eylemin"></textarea>
-        <button type="button" class="icon-btn" data-act="continue" title="Bir şey yapmadan hikayeyi ilerlet" aria-label="Hikayeyi ilerlet">${I.forward}</button>
-        <button type="submit" class="send" id="send" aria-label="Gönder">${I.send}</button>
-      </form>
-    </footer>
+    <aside class="panel" id="panel" aria-label="Durum ve hafıza"></aside>
   </div>`;
   const input = $('#input');
   const resize = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 180) + 'px'; };
@@ -553,7 +677,9 @@ function renderPlay(id) {
   if (settings.images) {
     P.scene = new SceneStage($('#scene-bg'), {
       key: (settings.keys.pollinations || '').trim(), style: settings.imgStyle, seedBase: save.id,
-      onStatus: on => { const st = $('#scene-status'); if (st) st.hidden = !on; },
+      portrait: $('#scene-bg').clientHeight > $('#scene-bg').clientWidth,
+      onStatus: showSceneStatus,
+      onKeyProblem: () => { if (!P?.keyWarned && P) { P.keyWarned = true; toast('Pollinations anahtarın çalışmadı, anahtarsız görsele geçildi. Ayarlar\'dan kontrol et.'); } },
     });
     P.scene.setBase(coverHTML(scen));
     let ticking = false;
@@ -561,6 +687,9 @@ function renderPlay(id) {
       if (ticking) return; ticking = true;
       requestAnimationFrame(() => { ticking = false; updateActiveScene(); });
     }, { passive: true });
+  } else {
+    const l = $('#scene-bg .layer');
+    l.innerHTML = coverHTML(scen); l.classList.add('on');
   }
   renderStory(true);
   renderPanel();
@@ -570,7 +699,20 @@ function renderPlay(id) {
 
 const lastMsg = () => P.save.messages[P.save.messages.length - 1];
 
-function msgHTML(m, i, isLast) {
+function showSceneStatus({ state, seconds }) {
+  const st = $('#scene-status'); if (!st) return;
+  st.hidden = state === 'idle';
+  st.classList.toggle('failed', state === 'fail');
+  st.disabled = state !== 'fail';
+  st.textContent = state === 'wait' ? `Sıradaki görsel ${seconds} sn sonra`
+    : state === 'fail' ? 'Görsel üretilemedi, tekrar dene'
+    : 'Sahne görseli hazırlanıyor';
+  clearTimeout(st._t);
+  // Geri sayımı canlı tut
+  if (state === 'wait' && seconds > 1) st._t = setTimeout(() => showSceneStatus({ state, seconds: seconds - 1 }), 1000);
+}
+
+function msgHTML(m, i, isLast, cast) {
   if (m.role === 'user') {
     if (m.cont) return `<div class="msg cont" data-i="${i}"><span>hikaye ilerliyor</span><div class="msg-tools"><button class="icon-btn sm" data-act="cut" data-i="${i}" title="Buradan sonrasını sil" aria-label="Buradan sonrasını sil">${I.trash}</button></div></div>`;
     return `<div class="msg user" data-i="${i}"><div class="msg-body">${md(m.text)}</div>
@@ -578,7 +720,8 @@ function msgHTML(m, i, isLast) {
   }
   const { visible } = splitOutput(cur(m));
   const n = m.alts.length;
-  return `<div class="msg model" data-i="${i}"><div class="msg-body">${storyHTML(visible)}</div>
+  const compose = settings.images && cast ? sceneComposer(P.save, P.scen, cast) : null;
+  return `<div class="msg model" data-i="${i}"><div class="msg-body">${storyHTML(visible, compose)}</div>
     <div class="msg-tools">
       ${n > 1 ? `<button class="icon-btn sm" data-act="alt" data-d="-1" data-i="${i}" aria-label="Önceki sürüm" ${m.ai === 0 ? 'disabled' : ''}>${I.left}</button><span class="alt-n">${m.ai + 1}/${n}</span><button class="icon-btn sm" data-act="alt" data-d="1" data-i="${i}" aria-label="Sonraki sürüm" ${m.ai === n - 1 ? 'disabled' : ''}>${I.right}</button>` : ''}
       ${isLast ? `<button class="icon-btn sm" data-act="regen" title="Yeniden yaz" aria-label="Yeniden yaz">${I.redo}</button>` : ''}
@@ -591,20 +734,28 @@ function renderStory(jump) {
   const el = $('#story'); if (!el) return;
   const { save, scen } = P;
   const msgs = save.messages;
-  const head = `<div class="story-head"><h1>${esc(scen.title)}</h1><p>${esc(save.label)}</p></div>`;
+  const head = `<div class="story-head"><h1 class="sr-only">${esc(scen.title)}</h1><p class="epigraph">${esc(scen.subtitle || save.label)}</p></div>`;
   let html = head;
   const lastIdx = msgs.length - 1;
+  let cast = new Map();
   msgs.forEach((m, i) => {
     if (i === save.sumUpTo && save.sumUpTo > 0) html += `<div class="memory-line"><span>Bu noktadan öncesi hikaye özetine aktarıldı</span></div>`;
-    html += msgHTML(m, i, i === lastIdx && !P.busy);
+    if (m.role === 'model') cast = applyCards(cast, m.alts?.[m.ai] || '', i);
+    html += msgHTML(m, i, i === lastIdx && !P.busy, withEdits(cast, save.castEdits));
   });
   if (P.error) {
     html += `<div class="err" role="alert"><p>${esc(P.error.message)}</p><div class="row"><button class="btn primary" data-act="retry">Tekrar dene</button>${P.error.kind === 'model' ? '<button class="btn" data-act="fix-model">Çalışan modeli bul</button>' : ''}${/anahtar|model/.test(P.error.kind) ? '<button class="btn" data-act="settings">Ayarları aç</button>' : ''}</div></div>`;
   }
   if (!msgs.length && P.busy) html += `<div class="msg model"><div class="msg-body"><p class="loading">Dünya kuruluyor</p></div></div>`;
   el.innerHTML = html;
-  if (jump) scrollStory(true);
+  // Seçenekler okuma alanını küçültür: önce onlar çizilir, sonra sona kaydırılır.
   renderOptions();
+  if (jump) {
+    scrollStory(true);
+    // Yazı tipi geç yüklenirse metin uzar; ilk açılışta yine sona in.
+    const me = P;
+    document.fonts?.ready.then(() => { if (P === me) scrollStory(true); });
+  }
   updateActiveScene();
 }
 
@@ -673,8 +824,17 @@ function statsHTML() {
   return `<section class="pbox"><h3>Durum</h3>${rows}</section>`;
 }
 
+function castHTML() {
+  if (!settings.images) return '';
+  const cast = [...castOf(P.save.messages, undefined, P.save.castEdits).entries()];
+  return `<section class="pbox"><details><summary>Karakterler (${cast.length})</summary>
+    <p class="hint">Görsellerde ve hikayede karakterlerin bu tarife göre görünür. Beğenmediğini değiştirebilirsin; görsel modeli için İngilizce yaz.</p>
+    ${cast.length ? cast.map(([k, c]) => `<label class="cast-card"><span>${esc(c.name)}</span><textarea rows="2" data-cast="${esc(k)}">${esc(c.look)}</textarea></label>`).join('') : '<p class="hint">Karakterler sahneye çıktıkça burada görünecek.</p>'}
+    </details></section>`;
+}
+
 function ledgerHTML() {
-  const items = ledgerOf(P.save);
+  const items = ledgerOf(P.save.messages);
   const grp = (type, title) => {
     const l = items.filter(x => x.type === type);
     return l.length ? `<h4>${title}</h4><ul class="ledger">${l.map(x => `<li>${esc(x.text)}</li>`).join('')}</ul>` : '';
@@ -688,7 +848,7 @@ function ledgerHTML() {
 function renderPanel() {
   const el = $('#panel'); if (!el) return;
   const { save, scen } = P;
-  const sl = (scen.setup || []).map(f => save.setup?.[f.id] ? `<li><span>${esc(f.label)}</span>${esc(save.setup[f.id])}</li>` : '').join('');
+  const sl = setupFields(scen).map(f => save.setup?.[f.id] ? `<li><span>${esc(f.label.replace(/\s*\(.*\)$/, ''))}</span>${esc(save.setup[f.id])}</li>` : '').join('');
   el.innerHTML = `
     <button class="icon-btn panel-x" data-act="toggle-panel" aria-label="Paneli kapat">${I.close}</button>
     ${statsHTML()}
@@ -697,6 +857,7 @@ function renderPanel() {
       <p class="hint">Yapay zekanın asla unutmamasını istediğin şeyler. Örneğin: "Kardeşimin adı Aras. Sol kolum yaralı."</p>
       <textarea data-field="notes" rows="4" placeholder="Not ekle">${esc(save.notes)}</textarea>
     </section>
+    ${castHTML()}
     ${ledgerHTML()}
     <section class="pbox">
       <details>
@@ -716,6 +877,10 @@ function renderPanel() {
       </div>
     </section>`;
   $$('textarea[data-field]', el).forEach(t => t.addEventListener('input', debounce(() => { P.save[t.dataset.field] = t.value; writeSave(P.save); }, 400)));
+  $$('textarea[data-cast]', el).forEach(t => t.addEventListener('input', debounce(() => {
+    P.save.castEdits = { ...(P.save.castEdits || {}), [t.dataset.cast]: t.value };
+    writeSave(P.save);
+  }, 400)));
 }
 
 function sendUser(text, cont = false) {
@@ -759,19 +924,44 @@ async function generate(kind = 'new') {
   node.innerHTML = '<p class="loading">Yazıyor</p>';
   scrollStory(true);
 
-  const system = buildSystem(save, scen, idx);
-  const history = buildHistory(save, scen, idx);
+  const lastUser = [...save.messages.slice(0, idx)].reverse().find(x => x.role === 'user');
+  const ooc = /^\s*\(?\s*ooc\b/i.test(lastUser?.text || '');
+  const prevReply = [...save.messages.slice(0, idx)].reverse().find(x => x.role === 'model');
+  const prevText = prevReply ? splitOutput(cur(prevReply)).visible : '';
+  const baseCast = withEdits(castOf(save.messages, idx), save.castEdits);
   const prov = settings.provider;
   const original = settings.models[prov];
   const tried = new Set();
   const FIRST_LIMIT = 35, STALL_LIMIT = 40, MAX_TRIES = 5;
   const NO_RETRY = ['anahtar', 'anahtar-yok', 'ag', 'filtre'];
-  let raw = '', pending = false, error = null, timedOut = false, stopped = false;
+  let raw = '', pending = false, error = null, timedOut = false, stopped = false, looped = false, truncated = false;
+  let scale = 1, qualityRetried = false, qualityNote = '';
+
+  const paint = () => {
+    pending = false;
+    if (P !== me || (!raw && node.querySelector('.loading'))) return;
+    const castNow = withEdits(applyCards(baseCast, raw), save.castEdits);
+    const compose = settings.images ? sceneComposer(save, scen, castNow) : null;
+    // Takip kararı içerik eklenmeden önce verilmeli; büyük bir parça gelince oyuncu altta kalmasın
+    const w = $('#story-wrap');
+    const follow = w && w.scrollHeight - w.scrollTop - w.clientHeight < 220;
+    node.innerHTML = storyHTML(splitOutput(raw).visible, compose) + '<span class="caret" aria-hidden="true"></span>';
+    if (follow) scrollStory(true);
+    if (!P.scene) return;
+    const keys = parseScenes(stripThink(raw)).map(compose).filter(Boolean);
+    keys.forEach(k => P.scene.prefetch(k));
+    // Görsel, ilk paragraf daha yazılmadan sahne etiketi gelir gelmez başlar
+    if (keys.length && !$('p[data-scene]', node)) P.scene.want(keys[0]);
+    else updateActiveScene();
+  };
+
   while (true) {
     tried.add(settings.models[prov]);
     const ctrl = new AbortController();
     P.ctrl = ctrl;
-    timedOut = false; error = null;
+    timedOut = false; error = null; looped = false; truncated = false;
+    const { system, history } = buildContext(save, scen, idx, scale);
+    if (qualityNote) history[history.length - 1].text += '\n\n' + qualityNote;
     const started = Date.now();
     let lastChunk = started;
     const label = settings.models[prov];
@@ -784,19 +974,39 @@ async function generate(kind = 'new') {
       } else if (now - lastChunk > STALL_LIMIT * 1000) { timedOut = true; ctrl.abort(); }
     }, 1000);
     try {
-      for await (const chunk of streamChat({ settings, system, history, signal: ctrl.signal })) {
+      const opts = { settings, system, history, signal: ctrl.signal, maxTokens: OUTPUT_TOKENS[settings.length] || OUTPUT_TOKENS.orta, onFinish: r => { if (r === 'length') truncated = true; } };
+      for await (const chunk of streamChat(opts)) {
         lastChunk = Date.now();
         raw += chunk; m.alts[m.ai] = raw;
-        if (!pending) {
-          pending = true;
-          requestAnimationFrame(() => { pending = false; if (P !== me) return; node.innerHTML = storyHTML(splitOutput(raw).visible) + '<span class="caret" aria-hidden="true"></span>'; scrollStory(); if (P.scene) { $$('p[data-scene]', node).forEach(p => P.scene.prefetch(p.dataset.scene)); updateActiveScene(); } });
-        }
+        if (isLooping(raw)) { looped = true; ctrl.abort(); break; }
+        if (!pending) { pending = true; requestAnimationFrame(paint); }
       }
     } catch (e) {
       if (e.name !== 'AbortError') error = e;
     }
     clearInterval(watch);
-    if (ctrl.signal.aborted && !timedOut) { stopped = true; break; }   // oyuncu durdurdu
+    if (ctrl.signal.aborted && !timedOut && !looped) { stopped = true; break; }   // oyuncu durdurdu
+    // İstek bu model için fazla uzunsa bağlamı daraltıp aynı modelle yeniden dene (özet ve defter yine gider)
+    if (error?.kind === 'cok-buyuk' && !raw.trim() && scale > 0.3) {
+      scale *= 0.6;
+      continue;
+    }
+    // Bozuk cevabı (yanlış dil, döngü, boş) oyuncu görmesin: bir kez düzeltme notuyla yeniden yaz
+    if (!error && !timedOut && raw.trim() && !qualityRetried && P === me) {
+      const issue = looped ? 'tekrar' : qualityIssue(splitOutput(raw).visible, { prevReply: prevText, ooc });
+      if (issue) {
+        qualityRetried = true;
+        qualityNote = {
+          dil: '[Önceki denemen geçersizdi: Türkçe dışında bir dil kullandın. Hikaye metnini yalnızca Türkçe yaz.]',
+          tekrar: '[Önceki denemen geçersizdi: aynı cümleleri tekrar ettin. Hikayeyi yeni olaylarla ilerlet, önceki cevabındaki cümleleri kullanma.]',
+          kisa: '[Önceki denemen geçersizdi: cevap neredeyse boştu. Sahneyi gerçekten yaz.]',
+        }[issue];
+        raw = ''; m.alts[m.ai] = '';
+        node.innerHTML = '<p class="loading">Daha iyi bir cevap yazılıyor</p>';
+        continue;
+      }
+    }
+    if (looped) { raw = removeRepeats(raw); m.alts[m.ai] = raw; looped = false; break; }
     if (!error && !timedOut) break;                                       // başarılı
     if (raw.trim()) break;                                                // yarım cevap var, model değiştirme
     if (error && NO_RETRY.includes(error.kind)) break;
@@ -816,6 +1026,11 @@ async function generate(kind = 'new') {
         ? `Denenen ${tried.size} modelin hiçbiri cevap vermedi. Ücretsiz katman şu an çok yoğun olabilir. Bir dakika sonra tekrar dene ya da Ayarlar'dan Groq anahtarı ekle (hızlı ve ücretsiz).${lastMsg_ ? ' Son hata: ' + lastMsg_ : ''}`
         : `Yapay zeka ${FIRST_LIMIT} saniyedir cevap vermedi. "Çalışan modeli bul"a bas.`) };
   }
+  // Çıktı sınırına takıldıysa yarım cümleyle bitmesin
+  if (truncated && raw.trim() && !stopped) {
+    const c = raw.search(TAG_CUT);
+    if (c < 0) { raw = trimToSentence(raw); m.alts[m.ai] = raw; }
+  }
   me.busy = false; me.ctrl = null;
   if (!raw.trim()) {
     if (kind === 'regen') { m.alts.pop(); m.ai = Math.max(0, m.alts.length - 1); }
@@ -826,38 +1041,112 @@ async function generate(kind = 'new') {
   P.error = error ? { message: error.message, kind: error.kind || 'genel', retry: raw.trim() ? 'regen' : kind } : null;
   if (error && raw.trim()) toast('Cevap yarıda kesildi: ' + error.message);
   renderStory(); renderPanel(); updateComposer(); scrollStory();
-  if (!error) maybeSummarize();
+  if (error || stopped || !raw.trim()) return;
+  await repairReply(me, m, ooc);
+  maybeSummarize();
 }
 
-const lim = () => settings.provider === 'gemini' ? { KEEP: 36, TRIGGER: 90 } : { KEEP: 14, TRIGGER: 36 };
+/** Model defteri ya da geçerli bir sahneyi atladıysa (zayıf modellerde sık olur) kısa bir istekle tamamlar.
+ *  Böylece hafıza ve görsel, modelin biçim kurallarına uymasına bağlı kalmaz. */
+async function repairReply(me, m, ooc) {
+  if (ooc) return;
+  const raw = m.alts[m.ai];
+  const clean = cur(m);
+  const visible = stripScenes(splitOutput(clean).visible);
+  const needLedger = !/<defter>/i.test(clean);
+  const hasScene = parseScenes(clean).some(s => !sceneProblem(s.text));
+  const needScene = settings.images && !hasScene;
+  if ((!needLedger && !needScene) || !visible) return;
+  const idx = me.save.messages.indexOf(m);
+  const cast = castOf(me.save.messages, idx, me.save.castEdits);
+  const ask = [];
+  if (needScene) ask.push(`Bu metnin ilk anı için görsel etiketleri. Metinde görünen ve aşağıdaki listede olmayan önemli karakterler için bir kez <karakter>Ad | English look, 10-18 words</karakter>, sonra <sahne kim="Ad">English, 15-28 words, starts with a camera angle, only what the text literally shows, no proper names, fully clothed, no blood</sahne>. Bilinen karakterler:\n${castLines(cast, visible) || '(yok)'}`);
+  if (needLedger) ask.push('Hikaye hafızası bloğu: <defter> ... </defter>. İçinde en fazla 5 satır. "+ metin" ileride önemli olacak yeni gerçek (kişi, söz, borç, yara, eşya, karar, sır, yer, zaman), "! metin" gecikmeli sonuç ve yaklaşık zamanı, "? metin" çözülmemiş mesele. Türkçe, kısa.');
+  try {
+    const out = await complete({
+      settings, temperature: 0.2, signal: AbortSignal.timeout(30000),
+      system: 'Bir hikaye oyununun kayıt memurusun. Yalnızca istenen etiketli blokları yaz; açıklama, giriş cümlesi ya da hikaye metni yazma.',
+      history: [{ role: 'user', text: `Oyuncunun son hamlesi: ${[...me.save.messages.slice(0, idx)].reverse().find(x => x.role === 'user')?.text || '(açılış)'}\n\nAnlatıcının cevabı:\n${visible}\n\nİstenenler:\n- ${ask.join('\n- ')}` }],
+    });
+    if (m.alts[m.ai] !== raw) return;   // bu arada oyuncu yeniden yazdırdıysa dokunma
+    let head = '', tail = '';
+    if (needScene) {
+      const scene = parseScenes(out).find(s => !sceneProblem(s.text));
+      if (scene) {
+        const cards = parseCards(out).map(c => `<karakter>${c.name} | ${c.look}</karakter>`).join('\n');
+        head = `${cards}${cards ? '\n' : ''}<sahne kim="${(scene.kim || []).join(', ')}">${scene.text}</sahne>\n\n`;
+      }
+    }
+    if (needLedger) {
+      const d = out.match(/<defter>[\s\S]*?(<\/defter>|$)/i);
+      if (d) tail = '\n\n' + d[0];
+    }
+    if (!head && !tail) return;
+    m.alts[m.ai] = head + raw + tail;
+    writeSave(me.save);
+    if (P === me && !P.busy) { renderStory(); renderPanel(); } else if (P === me) renderPanel();
+  } catch (e) { console.warn('Hafıza tamamlanamadı', e); }
+}
+
 async function maybeSummarize() {
   const me = P; if (!me || me.summarizing) return;
   const { save, scen } = me;
   const start = save.sumUpTo || 0;
-  const { KEEP, TRIGGER } = lim();
-  if (save.messages.length - start < TRIGGER) return;
-  const upto = save.messages.length - KEEP;
+  const budget = budgetNow();
+  const systemTokens = approxTokens(buildSystem(save, scen, save.messages.length, budget));
+  const budgetTokens = Math.max(1200, budget.total - systemTokens - 250);
+  const plan = summaryPlan({
+    messages: save.messages, start, budgetTokens,
+    maxChunk: Math.min(Math.floor(budget.total * 0.55), 24000),
+    textOf: m => historyText(m, false),
+  });
+  if (!plan) return;
+  const { upto } = plan;
   const chunk = save.messages.slice(start, upto).map(m => m.role === 'user'
     ? (m.cont ? '' : 'OYUNCU: ' + m.text)
     : 'ANLATICI: ' + stripScenes(splitOutput(cur(m)).visible)).filter(Boolean).join('\n\n');
   me.summarizing = true; renderPanel();
   try {
     const text = await complete({
-      settings, temperature: 0.3,
+      settings, temperature: 0.2, signal: AbortSignal.timeout(90000),
       system: 'Sen uzun soluklu bir rol yapma oyununun arşivcisisin. Görevin hikayenin hafızasını eksiksiz ve kısa tutmak. Sadece Türkçe özet yaz.',
-      history: [{ role: 'user', text: `Senaryo: ${scen.title}\nOyuncunun seçimleri:\n${setupLines(save, scen)}\n\nŞimdiye kadarki özet:\n${save.summary || '(henüz yok)'}\n\nYeni olaylar:\n${chunk}\n\nBu ikisini birleştirerek güncel ve eksiksiz bir hikaye özeti yaz. Mutlaka koru: oyuncunun karakteri ve şu anki durumu, önemli yan karakterler ve oyuncuyla ilişkileri, verilen sözler, borçlar ve açık görevler, envanter ve kaynaklar, sırayla yaşanan kritik olaylar, bulunulan yer ve zaman. Kısa maddeler halinde, en fazla 450 kelime. Sadece özeti yaz.` }],
+      history: [{ role: 'user', text: `Senaryo: ${scen.title}\nOyuncunun seçimleri:\n${setupLines(save, scen)}\n\nŞimdiye kadarki özet:\n${save.summary || '(henüz yok)'}\n\nYeni olaylar:\n${chunk}\n\nBu ikisini birleştirerek güncel ve eksiksiz bir hikaye özeti yaz. Eski özetteki hiçbir önemli bilgiyi atma. Özel isimleri, sayıları ve eşya adlarını birebir koru. Mutlaka koru: oyuncunun karakteri ve şu anki durumu, önemli yan karakterler ve oyuncuyla ilişkileri, kimin neyi bildiği, verilen sözler, borçlar ve açık görevler, envanter ve kaynaklar, sırayla yaşanan kritik olaylar, bulunulan yer ve zaman. Kısa maddeler halinde, en fazla ${budget.sumWords} kelime. Sadece özeti yaz.` }],
     });
-    if (text.trim()) { save.summary = text.trim(); save.sumUpTo = upto; writeSave(save); }
+    // Model bozuk ya da kısacık özet döndürdüyse eskisini koru; sonraki turda yeniden denenir
+    if (acceptableSummary(text, save.summary)) {
+      // Geri alma için önceki özeti sakla: silinen olaylar özette kalmasın
+      save.sumLog = [...(save.sumLog || []), { upto: start, summary: save.summary || '' }].slice(-8);
+      save.summary = text.trim(); save.sumUpTo = upto;
+      writeSave(save);
+    }
   } catch (e) { console.warn('Özet alınamadı', e); }
   me.summarizing = false;
-  if (P === me) { renderPanel(); renderStory(); }
+  if (P === me) { renderPanel(); if (!P.busy) renderStory(); }
+}
+
+/** Düzenlemede gizli etiketler görünmesin; kaydederken yerlerine dönsünler */
+function hiddenTags(text) {
+  const cards = (text.match(/<(karakter|dunya|dünya)>[\s\S]*?<\/(karakter|dunya|dünya)>/gi) || []).join('\n');
+  const scenes = [];
+  let at = 0;
+  stripCards(text).split(/\n{2,}/).forEach(par => {
+    const tags = par.match(sceneTagRe()) || [];
+    if (tags.length) scenes.push({ at, tags: tags.join('') });
+    if (stripScenes(par).trim()) at++;
+  });
+  return { cards, scenes };
+}
+function withHiddenTags(edited, { cards, scenes }) {
+  const pars = edited.split(/\n{2,}/);
+  scenes.forEach(s => { const i = Math.min(s.at, pars.length - 1); pars[i] = s.tags + '\n' + pars[i]; });
+  return (cards ? cards + '\n\n' : '') + pars.join('\n\n');
 }
 
 function startEdit(i) {
   const m = P.save.messages[i];
   const box = $(`.msg[data-i="${i}"]`); if (!box || P.busy) return;
   const raw = m.role === 'model' ? cur(m) : m.text;
-  const visible = m.role === 'model' ? splitOutput(raw).visible : raw;
+  const visible = m.role === 'model' ? stripScenes(splitOutput(raw).visible) : raw;
   box.classList.add('editing');
   box.innerHTML = `<textarea class="edit-area" rows="6">${esc(visible)}</textarea><div class="row"><button class="btn primary sm" data-act="edit-save" data-i="${i}">Kaydet</button><button class="btn sm" data-act="edit-cancel">Vazgeç</button></div>`;
   const ta = $('textarea', box); ta.style.height = Math.min(ta.scrollHeight + 4, 480) + 'px'; ta.focus();
@@ -869,16 +1158,18 @@ function saveEdit(i) {
   if (!val) return;
   if (m.role === 'model') {
     const raw = cur(m); const cut = raw.search(TAG_CUT);
-    m.alts[m.ai] = val + (cut >= 0 ? '\n\n' + raw.slice(cut) : '');
+    const hidden = hiddenTags(cut >= 0 ? raw.slice(0, cut) : raw);
+    m.alts[m.ai] = withHiddenTags(val, hidden) + (cut >= 0 ? '\n\n' + raw.slice(cut) : '');
   } else m.text = val;
   writeSave(P.save); renderStory(); renderPanel();
 }
-function cutFrom(i) {
+async function cutFrom(i) {
   if (P.busy) return;
-  if (!confirm('Bu mesaj ve sonrasındaki her şey silinecek. Hikaye bu noktadan yeniden ilerleyecek. Emin misin?')) return;
+  const me = P;
+  if (!(await ask('Bu mesaj ve sonrasındaki her şey silinecek. Hikaye bu noktadan yeniden ilerleyecek.', { ok: 'Sil', danger: true })) || P !== me || P.busy) return;
   const { save } = P;
+  rewindSummary(save, i);
   save.messages.splice(i);
-  if ((save.sumUpTo || 0) > i) save.sumUpTo = i;
   P.error = null;
   writeSave(save); renderStory(); renderPanel();
 }
@@ -911,6 +1202,13 @@ function openSettings(msg = '') {
       <p class="hint">Anahtarın sadece bu tarayıcıda saklanır, hiçbir sunucuya kaydedilmez.</p>
     </section>
     <section class="m-sec">
+      <h3>Okuma</h3>
+      <span class="label">Zemin</span>
+      <div class="seg" role="group" aria-label="Zemin">${[['gece', 'Gece'], ['kagit', 'Kâğıt']].map(([k, l]) => `<button class="${(settings.theme || 'gece') === k ? 'on' : ''}" data-act="theme" data-v="${k}">${l}</button>`).join('')}</div>
+      <span class="label" style="margin-top:14px">Yazı boyu</span>
+      <div class="seg" role="group" aria-label="Yazı boyu">${[['kucuk', 'Küçük'], ['orta', 'Orta'], ['buyuk', 'Büyük']].map(([k, l]) => `<button class="${(settings.readSize || 'orta') === k ? 'on' : ''}" data-act="rsize" data-v="${k}">${l}</button>`).join('')}</div>
+    </section>
+    <section class="m-sec">
       <h3>Anlatım</h3>
       <span class="label">Cevap uzunluğu</span>
       <div class="seg" role="group" aria-label="Cevap uzunluğu">${[['kisa', 'Kısa'], ['orta', 'Orta'], ['uzun', 'Uzun']].map(([k, l]) => `<button class="${settings.length === k ? 'on' : ''}" data-act="len" data-l="${k}">${l}</button>`).join('')}</div>
@@ -919,12 +1217,12 @@ function openSettings(msg = '') {
     </section>
     <section class="m-sec">
       <h3>Sahne görselleri</h3>
-      <p class="hint">Hikaye yazılırken anlatılan yerin görseli ücretsiz olarak üretilir ve arka planda yumuşakça değişir. Görseller mekânı ve atmosferi gösterir; ünlü karakterleri ya da gerçek kişileri çizmez.</p>
+      <p class="hint">Hikaye yazılırken anlatılan sahnenin görseli üretilir ve arka planda yumuşakça değişir. Karakterler, oyunun "Karakterler" bölümündeki tarife göre çizilir; gerçek kişilere benzetilmez.</p>
       <div class="seg" role="group" aria-label="Sahne görselleri">${[[true, 'Açık'], [false, 'Kapalı']].map(([k, l]) => `<button class="${!!settings.images === k ? 'on' : ''}" data-act="img-on" data-v="${k ? 1 : 0}">${l}</button>`).join('')}</div>
       <span class="label" style="margin-top:12px">Görsel tarzı</span>
       <div class="seg" role="group" aria-label="Görsel tarzı">${Object.entries(SCENE_STYLES).map(([k, v]) => `<button class="${settings.imgStyle === k ? 'on' : ''}" data-act="img-style" data-v="${k}">${v.label}</button>`).join('')}</div>
       <label class="field" style="margin-top:12px"><span>Pollinations anahtarı (isteğe bağlı)</span><input type="password" data-s="pollkey" value="${esc(settings.keys.pollinations || '')}" autocomplete="off" spellcheck="false" placeholder="pk_ ile başlayan uygulama anahtarı"></label>
-      <p class="hint">Anahtarsız da çalışır, ama ücretsiz sınır yüzünden görsel en fazla 45 saniyede bir değişir ve köşede küçük bir logo olur. enter.pollinations.ai adresinden ücretsiz hesap açıp "pk_" ile başlayan bir anahtar alırsan görseller daha hızlı ve logosuz gelir.</p>
+      <p class="hint">Anahtarsız da çalışır, ama ücretsiz sınır yüzünden görsel en fazla 45 saniyede bir değişir, köşede küçük bir logo olur ve daha basit bir model kullanılır: yakın planda yüzler ve aynı karedeki iki kişi bozuk çıkabilir. enter.pollinations.ai adresinden hesap açıp "pk_" ile başlayan bir anahtar girersen görseller çok daha gerçekçi, hızlı ve logosuz gelir.</p>
       <a class="btn sm" href="https://enter.pollinations.ai" target="_blank" rel="noopener">Pollinations anahtar sayfası</a>
     </section>
     <section class="m-sec">
@@ -1062,6 +1360,7 @@ function renderCreator(editId) {
   app.innerHTML = `
   <div class="creator">
     ${topbar()}
+    <div class="creator-wrap">
     <form class="cform" id="cform">
       <h1>${ex ? 'Senaryoyu düzenle' : 'Kendi dünyanı yaz'}</h1>
       <p class="lead">Ne kadar ayrıntı verirsen yapay zeka dünyana o kadar sadık kalır. Kanondaki bir evreni (bir dizi, kitap, oyun) adıyla yazman da yeterli; yapay zeka onu tanıyorsa gerisini tamamlar.</p>
@@ -1097,21 +1396,27 @@ function renderCreator(editId) {
 
       <div class="row form-end"><a class="btn ghost" href="${ex ? '#/senaryo/' + esc(ex.id) : '#/'}">Vazgeç</a><button class="btn primary big" type="submit">${ex ? 'Değişiklikleri kaydet' : 'Senaryoyu kaydet'}</button></div>
     </form>
+    <aside class="c-preview" aria-hidden="true"><div id="c-poster"></div><p class="hint">Afişin duvarda böyle görünecek. İki nokta koyarsan sonrası alt başlık olur.</p></aside>
+    </div>
   </div>`;
   const form = $('#cform');
+  const preview = () => { const el = $('#c-poster'); if (el) el.innerHTML = posterHTML({ id: 'onizleme', title: form.elements.title.value, cover, image }); };
+  form.addEventListener('input', debounce(e => { if (e.target.name === 'title') preview(); }, 60));
   form.addEventListener('change', e => { if (e.target.name === 'mode') $('.char-field').hidden = e.target.value !== 'karakter'; });
   $('#cover-pick').addEventListener('click', e => {
     const b = e.target.closest('.cp'); if (!b) return;
     cover = b.dataset.cover; image = '';
     $$('.cp').forEach(x => x.classList.toggle('on', x === b));
     $('#cimg-state').textContent = '';
+    preview();
   });
   $('#cimg').addEventListener('change', async e => {
     const file = e.target.files[0]; if (!file) return;
-    try { image = await readImage(file); $$('.cp').forEach(x => x.classList.remove('on')); $('#cimg-state').textContent = 'Kendi resmin kullanılacak.'; }
+    try { image = await readImage(file); $$('.cp').forEach(x => x.classList.remove('on')); $('#cimg-state').textContent = 'Kendi resmin kullanılacak.'; preview(); }
     catch { toast('Bu resim okunamadı.'); }
   });
-  $('#cimg-clear')?.addEventListener('click', () => { image = ''; $('#cimg-state').textContent = ''; $(`.cp[data-cover="${cover}"]`)?.classList.add('on'); });
+  $('#cimg-clear')?.addEventListener('click', () => { image = ''; $('#cimg-state').textContent = ''; $(`.cp[data-cover="${cover}"]`)?.classList.add('on'); preview(); });
+  preview();
   form.addEventListener('submit', e => {
     e.preventDefault();
     const fd = new FormData(form);
@@ -1157,6 +1462,10 @@ document.addEventListener('click', e => {
   switch (act) {
     case 'settings': e.preventDefault(); openSettings(); break;
     case 'close-modal': closeModal(); break;
+    case 'to-wall': $('#wall-top')?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); break;
+    case 'toggle-plate': b.classList.toggle('open'); break;
+    case 'theme': settings.theme = b.dataset.v; saveSettings(); applyPrefs(); $$('[data-act="theme"]').forEach(x => x.classList.toggle('on', x === b)); break;
+    case 'rsize': settings.readSize = b.dataset.v; saveSettings(); applyPrefs(); $$('[data-act="rsize"]').forEach(x => x.classList.toggle('on', x === b)); break;
     case 'cat': homeState.cat = b.dataset.cat; $$('.chip').forEach(c => c.classList.toggle('on', c === b)); renderShelves(); break;
     case 'prov': settings.provider = b.dataset.p; saveSettings(); openSettings(); if (view === 'home') renderHome(); break;
     case 'len': settings.length = b.dataset.l; saveSettings(); $$('[data-act="len"]').forEach(x => x.classList.toggle('on', x === b)); break;
@@ -1174,20 +1483,26 @@ document.addEventListener('click', e => {
       break;
     case 'export': exportBackup(); break;
     case 'wipe':
-      if (confirm('Bütün oyunların, senaryoların ve ayarların silinecek. Bu geri alınamaz. Emin misin?')) {
+      ask('Bütün oyunların, senaryoların ve ayarların silinecek. Bu geri alınamaz.', { ok: 'Her şeyi sil', danger: true }).then(yes => {
+        if (!yes) return;
         Object.keys(localStorage).filter(k => k.startsWith('diyar.')).forEach(k => localStorage.removeItem(k));
         location.hash = '#/'; location.reload();
-      }
+      });
       break;
     case 'del-save':
-      if (confirm('Bu oyun kalıcı olarak silinecek. Emin misin?')) { const id = b.dataset.id; deleteSave(id); b.closest('.save-row')?.remove(); renderShelves(); }
+      ask('Bu oyun kalıcı olarak silinecek.', { ok: 'Sil', danger: true }).then(yes => {
+        if (!yes) return;
+        deleteSave(b.dataset.id); b.closest('.save-row')?.remove(); renderShelves();
+      });
       break;
     case 'del-scen':
-      if (confirm('Bu senaryo silinecek. Bu senaryodaki kayıtlı oyunların yine de oynanabilir kalır. Emin misin?')) {
+      ask('Bu senaryo silinecek. Bu senaryodaki kayıtlı oyunların yine de oynanabilir kalır.', { ok: 'Sil', danger: true }).then(yes => {
+        if (!yes) return;
         store.set('custom', customs().filter(c => c.id !== b.dataset.id)); closeModal(true); location.hash = '#/'; renderHome();
-      }
+      });
       break;
     // oyun ekranı
+    case 'scene-retry': P?.scene?.retry(); break;
     case 'toggle-panel': $('.play')?.classList.toggle('panel-open'); break;
     case 'opt': if (P && !P.busy) sendUser(b.textContent.trim()); break;
     case 'continue':
@@ -1205,8 +1520,13 @@ document.addEventListener('click', e => {
     case 'edit-cancel': renderStory(); break;
     case 'cut': cutFrom(i); break;
     case 'rename': {
-      const v = prompt('Bu oyunun yeni adı:', P.save.label);
-      if (v && v.trim()) { P.save.label = v.trim().slice(0, 60); writeSave(P.save); $('#save-label').textContent = P.save.label; renderStory(); }
+      const me = P;
+      ask('Bu oyunun yeni adı', { ok: 'Kaydet', input: P.save.label }).then(v => {
+        if (!v || !v.trim() || P !== me) return;
+        P.save.label = v.trim().slice(0, 60); writeSave(P.save);
+        $('#save-label').textContent = P.save.label; $('#save-label-2').textContent = P.save.label;
+        renderPanel();
+      });
       break;
     }
     case 'export-story': {
@@ -1216,10 +1536,19 @@ document.addEventListener('click', e => {
       break;
     }
     case 'del-current':
-      if (confirm('Bu oyun kalıcı olarak silinecek. Emin misin?')) { const id = P.save.id; leavePlay(); deleteSave(id); location.hash = '#/'; }
+      ask('Bu oyun kalıcı olarak silinecek.', { ok: 'Sil', danger: true }).then(yes => {
+        if (!yes || !P) return;
+        const id = P.save.id; leavePlay(); deleteSave(id); location.hash = '#/';
+      });
       break;
   }
 });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('.modal-back')) closeModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('.modal-back') && !$('dialog[open]')) closeModal();
+  // Yazı alanı dışındayken 1-4 tuşları seçenekleri seçer
+  if (P && !P.busy && /^[1-4]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey && !e.target.closest?.('input, textarea, select') && !$('.modal-back') && !$('dialog[open]')) {
+    $$('#options .opt')[+e.key - 1]?.click();
+  }
+});
 window.addEventListener('hashchange', route);
 route();

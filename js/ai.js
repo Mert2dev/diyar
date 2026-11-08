@@ -42,9 +42,10 @@ function baseUrl(s) {
 function thinkingFor(model) {
   const m = model.toLowerCase();
   if (/gemma/.test(m)) return null;
-  if (/gemini-2\.5-flash-lite/.test(m)) return { thinkingBudget: 0 };
-  if (/gemini-2\.5-flash/.test(m)) return { thinkingBudget: 300 };
-  if (/gemini-2\.5-pro/.test(m)) return { thinkingBudget: 128 };
+  // Biraz düşünmek tutarlılığı ciddi artırır; tamamen kapatınca model defteri ve geçmişi gözden kaçırıyor.
+  if (/gemini-2\.5-flash-lite/.test(m)) return { thinkingBudget: 512 };
+  if (/gemini-2\.5-flash/.test(m)) return { thinkingBudget: 1024 };
+  if (/gemini-2\.5-pro/.test(m)) return { thinkingBudget: 1024 };
   if (/gemini-(3|4|5|flash-latest|flash-lite-latest|pro-latest)/.test(m)) return { thinkingLevel: 'low' };
   return null;
 }
@@ -56,6 +57,7 @@ async function friendlyError(res, model) {
   let msg = body;
   try { const j = JSON.parse(body); msg = j.error?.message || j.message || body; } catch {}
   const low = String(msg).toLowerCase();
+  if (res.status === 413 || /request too large|context.?length|too many tokens|maximum context|tokens? per minute.*requested/.test(low)) return new AIError('İstek bu model için fazla uzun.', 'cok-buyuk');
   if (res.status === 429) return new AIError('Ücretsiz kullanım limitine takıldın. Bir dakika bekleyip tekrar dene; günlük limit dolduysa ayarlardan başka bir model ya da servis seç.', 'limit');
   if (low.includes('api key not valid') || low.includes('api_key_invalid') || res.status === 401) return new AIError('API anahtarı geçersiz görünüyor. Ayarlar\'dan anahtarı kontrol et.', 'anahtar');
   if (res.status === 403) return new AIError('Servis bu anahtarla erişime izin vermedi. Anahtarın doğru servise ait olduğundan emin ol.', 'anahtar');
@@ -95,8 +97,9 @@ async function doFetch(url, opts) {
   }
 }
 
-/** Mesajları akış halinde üretir. history: [{role:'user'|'model', text}] */
-export async function* streamChat({ settings, system, history, signal, temperature }) {
+/** Mesajları akış halinde üretir. history: [{role:'user'|'model', text}]
+ *  onFinish: model neden durdu? 'length' ise çıktı sınırına takılmıştır. */
+export async function* streamChat({ settings, system, history, signal, temperature, maxTokens, onFinish }) {
   const s = settings;
   const k = key(s);
   const model = s.models?.[s.provider];
@@ -142,6 +145,7 @@ export async function* streamChat({ settings, system, history, signal, temperatu
         if (p.text) { got = true; yield p.text; }
       }
     }
+    if (finish === 'MAX_TOKENS') onFinish?.('length');
     if (!got && (finish === 'SAFETY' || finish === 'PROHIBITED_CONTENT' || finish === 'BLOCKLIST'))
       throw new AIError('Google\'ın güvenlik filtresi bu cevabı kesti. "Tekrar dene"ye bas ya da son mesajını değiştir.', 'filtre');
     if (!got && !signal?.aborted) throw new AIError('Yapay zeka boş bir cevap döndürdü. Tekrar dene.', 'bos');
@@ -149,15 +153,16 @@ export async function* streamChat({ settings, system, history, signal, temperatu
   }
 
   // OpenAI uyumlu servisler (Groq, OpenRouter, özel)
-  // Groq'un ücretsiz katmanı dakikada az jeton kabul ediyor: ilk mesaj + son mesajları gönder, gerisi özette.
-  if (s.provider === 'groq' && history.length > 16) history = [history[0], ...history.slice(-14).filter((m, i) => !(i === 0 && m.role === 'user' && history[0].role === 'user'))];
+  // Geçmiş buraya bütçeye sığdırılmış halde gelir (bkz. memory.js); burada mesaj silinmez.
   const messages = [{ role: 'system', content: system }, ...history.map(m => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.text }))];
   const headers = { 'Content-Type': 'application/json' };
   if (k) headers['Authorization'] = 'Bearer ' + k;
   if (s.provider === 'openrouter') { headers['X-Title'] = 'Diyar'; }
+  const payload = { model, messages, temperature: temp, stream: true };
+  if (maxTokens) payload.max_tokens = maxTokens;
   const res = await doFetch(`${baseUrl(s)}/chat/completions`, {
     method: 'POST', headers, signal,
-    body: JSON.stringify({ model, messages, temperature: temp, stream: true }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) throw await friendlyError(res, model);
   let got = false;
@@ -165,7 +170,9 @@ export async function* streamChat({ settings, system, history, signal, temperatu
     if (!data || data === '[DONE]') continue;
     let j; try { j = JSON.parse(data); } catch { continue; }
     if (j.error) throw new AIError('Servis hatası: ' + (j.error.message || 'bilinmeyen hata'), 'genel');
-    const t = j.choices?.[0]?.delta?.content;
+    const c = j.choices?.[0];
+    if (c?.finish_reason) onFinish?.(c.finish_reason);
+    const t = c?.delta?.content;
     if (t) { got = true; yield t; }
   }
   if (!got && !signal?.aborted) throw new AIError('Yapay zeka boş bir cevap döndürdü. Tekrar dene.', 'bos');
@@ -197,9 +204,9 @@ export async function listModels(s) {
   const res = await doFetch(`${baseUrl(s)}/models`, { headers });
   if (!res.ok) throw await friendlyError(res, '');
   const j = await res.json();
-  let list = (j.data || []).map(m => ({ id: m.id, label: m.name || m.id, free: m.pricing ? (+m.pricing.prompt === 0 && +m.pricing.completion === 0) : undefined }));
+  let list = (j.data || []).map(m => ({ id: m.id, label: m.name || m.id, ctx: m.context_length || m.context_window || 0, free: m.pricing ? (+m.pricing.prompt === 0 && +m.pricing.completion === 0) : undefined }));
   if (s.provider === 'openrouter') list = list.filter(m => m.id.endsWith(':free') || m.free);
-  if (s.provider === 'groq') list = list.filter(m => !/(whisper|tts|guard|embed|playai)/i.test(m.id));
+  if (s.provider === 'groq') list = list.filter(m => !/(whisper|tts|guard|embed|playai|orpheus)/i.test(m.id));
   return list.sort((a, b) => a.id.localeCompare(b.id));
 }
 

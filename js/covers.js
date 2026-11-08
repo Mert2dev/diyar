@@ -1,136 +1,12 @@
-// Kapak görselleri: her tema için kodla çizilen bir manzara (SVG). Dışarıdan resim gerekmez.
+// Dünya afişleri: her tema, sınırlı mürekkep rengiyle elle kurulmuş bir baskı afişidir (SVG).
+// Dışarıdan resim gerekmez. Başlık afişin üstüne HTML olarak yazılır (bkz. app.js > posterHTML),
+// böylece kendi senaryosunu yazan kişinin başlığı da aynı baskı diliyle görünür.
+//
+// bg / ink / accent / on: dünya sayfasının ve oyun ekranının renkleri
+// title: afiş başlığının rengi, pos: başlığın yeri (top | bottom)
+// font / wf: başlık yazı tipi ve ortalama harf genişliği (uzun kelimeyi afişe sığdırmak için)
 
-export const THEMES = {
-  'kuzey': {
-    label: 'Karlı kuzey kalesi',
-    sky: ['#24324a', '#55698a', '#aebccc'],
-    sun: { x: .74, y: .36, r: 14, c: '#f4f0e6', glow: .45 },
-    layers: [
-      { t: 'mountains', y: .50, a: .30, c: '#4a5a74' },
-      { t: 'castle', x: .34, y: .64, s: 1.05, c: '#1c2536' },
-      { t: 'mountains', y: .70, a: .12, c: '#29334a' },
-      { t: 'pines', y: .84, h: .24, c: '#121925' },
-    ],
-    fog: '#c9d3df', fx: 'snow',
-  },
-  'baskent': {
-    label: 'Deniz kıyısında başkent',
-    sky: ['#3a1424', '#a33b2e', '#f0a75a'],
-    sun: { x: .22, y: .64, r: 30, c: '#ffd890', glow: .7 },
-    layers: [
-      { t: 'sea', y: .68, c: '#3a1a26', glint: '#f2b066' },
-      { t: 'castle', x: .70, y: .56, s: 1.35, c: '#24101a', roofs: true },
-      { t: 'city', y: .70, h: .12, c: '#24101a', x0: .42, x1: 1, win: '#ffb35c' },
-      { t: 'birds', n: 7, c: '#2a1018' },
-    ],
-    fx: 'none',
-  },
-  'meyhane': {
-    label: 'Gece, şehir ve mum ışığı',
-    sky: ['#120e1e', '#2d2140', '#5a3a4a'],
-    sun: { x: .80, y: .22, r: 18, c: '#f3e3c3', glow: .35 },
-    layers: [
-      { t: 'castle', x: .26, y: .52, s: .95, c: '#1c1526', roofs: true },
-      { t: 'city', y: .64, h: .22, c: '#18121f', win: '#f2a54a', dense: true },
-      { t: 'city', y: .80, h: .12, c: '#0f0b15', win: '#ffbe62', dense: true },
-    ],
-    fx: 'stars',
-  },
-  'sisli-orman': {
-    label: 'Sisli yağmur ormanı',
-    sky: ['#3d4a4f', '#6f7f80', '#a7b2ad'],
-    layers: [
-      { t: 'mountains', y: .45, a: .18, c: '#5e6d6e' },
-      { t: 'pines', y: .62, h: .30, c: '#435352' },
-      { t: 'pines', y: .74, h: .34, c: '#2a3837' },
-      { t: 'pines', y: .90, h: .42, c: '#141d1d' },
-    ],
-    fog: '#c4ccc6', fogStrong: true, fx: 'rain',
-  },
-  'buyulu-sato': {
-    label: 'Gölün kıyısında büyülü şato',
-    sky: ['#0b1030', '#1e2b63', '#4a3f7a'],
-    sun: { x: .76, y: .24, r: 26, c: '#f5f0dc', glow: .5 },
-    layers: [
-      { t: 'mountains', y: .55, a: .22, c: '#1c2450' },
-      { t: 'castle', x: .44, y: .60, s: 1.3, c: '#0c1130', roofs: true, many: true, win: '#ffd27a' },
-      { t: 'sea', y: .70, c: '#0d1436', glint: '#f5f0dc' },
-      { t: 'pines', y: .92, h: .18, c: '#070a1e' },
-    ],
-    fx: 'sparkles',
-  },
-  'volkan': {
-    label: 'Ateş dağı ve kara topraklar',
-    sky: ['#120a0c', '#3a1512', '#b2421c'],
-    layers: [
-      { t: 'volcano', x: .66, y: .58, c: '#1d0f0f', glow: '#ff6a2a' },
-      { t: 'mountains', y: .66, a: .18, c: '#160c0d' },
-      { t: 'ruins', y: .82, h: .14, c: '#0c0707' },
-    ],
-    fx: 'embers',
-  },
-  'savas-gogu': {
-    label: 'Savaş uçaklarıyla dolu gökyüzü',
-    sky: ['#4e5a63', '#9a958a', '#d6c4a2'],
-    sun: { x: .30, y: .50, r: 34, c: '#f3e2bd', glow: .5 },
-    layers: [
-      { t: 'planes', n: 6, c: '#2b2f33' },
-      { t: 'hills', y: .70, a: .08, c: '#6f6a5e' },
-      { t: 'ruins', y: .80, h: .16, c: '#3b3832' },
-      { t: 'hills', y: .90, a: .05, c: '#24221e' },
-    ],
-    fog: '#d9ccb0', fx: 'smoke',
-  },
-  'siper': {
-    label: 'Siperler ve dikenli tel',
-    sky: ['#3f4236', '#7a7a62', '#b3ab8a'],
-    sun: { x: .66, y: .46, r: 22, c: '#e9e0c4', glow: .3 },
-    layers: [
-      { t: 'hills', y: .64, a: .06, c: '#5a5946' },
-      { t: 'ruins', y: .72, h: .10, c: '#45443a', x0: .5, x1: 1 },
-      { t: 'hills', y: .80, a: .04, c: '#33332a' },
-      { t: 'fence', y: .86, c: '#1c1c16' },
-      { t: 'birds', n: 5, c: '#2b2b22' },
-    ],
-    fog: '#bdb593', fx: 'rain',
-  },
-  'salgin': {
-    label: 'Kıyamet sonrası şehir',
-    sky: ['#1b1f12', '#4f5a1e', '#c9902e'],
-    sun: { x: .62, y: .58, r: 40, c: '#f3c25a', glow: .55 },
-    layers: [
-      { t: 'skyline', y: .66, h: .34, c: '#191a10' },
-      { t: 'sea', y: .74, c: '#14150d', glint: '#e8a83a' },
-      { t: 'city', y: .86, h: .14, c: '#0b0c07', x0: 0, x1: .5 },
-    ],
-    fx: 'smoke',
-  },
-  'neon': {
-    label: 'Neon ışıklı gelecek şehri',
-    sky: ['#0d0620', '#3b0f55', '#c43a8a'],
-    layers: [
-      { t: 'skyline', y: .60, h: .30, c: '#240a3a' },
-      { t: 'city', y: .64, h: .50, c: '#160828', win: '#41e0e6', dense: true, tall: true },
-      { t: 'city', y: .84, h: .30, c: '#0a0414', win: '#ff4fb0', dense: true },
-    ],
-    fx: 'rain',
-  },
-  'safak': {
-    label: 'Yeni dünyada şafak',
-    sky: ['#4a5c9e', '#d98aa8', '#ffd59a'],
-    sun: { x: .5, y: .64, r: 34, c: '#fff1c8', glow: .7 },
-    layers: [
-      { t: 'mountains', y: .54, a: .24, c: '#8d79a8' },
-      { t: 'castle', x: .76, y: .62, s: .7, c: '#5e5182', roofs: true },
-      { t: 'dragon', x: .26, y: .26, s: 1, c: '#463a66' },
-      { t: 'hills', y: .74, a: .07, c: '#557a62' },
-      { t: 'hills', y: .88, a: .05, c: '#2f4d3d' },
-    ],
-    fx: 'none',
-  },
-};
-
-const W = 400, H = 250;
+const W = 600, H = 800;
 let counter = 0;
 
 function hashStr(s) {
@@ -143,240 +19,270 @@ function rng(seed) {
   return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
 }
 const f = n => Math.round(n * 10) / 10;
+const rect = (x, y, w, h, c, extra = '') => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${c}" ${extra}/>`;
+const disc = (x, y, r, c, extra = '') => `<circle cx="${x}" cy="${y}" r="${r}" fill="${c}" ${extra}/>`;
 
-function mountains(L, r) {
-  const base = L.y * H; let x = 0; let d = `M0 ${H} L0 ${f(base - r() * L.a * H * .5)}`;
-  while (x < W) {
-    x += 18 + r() * 34;
-    const peak = base - (0.25 + r() * 0.75) * L.a * H;
-    d += ` L${f(x)} ${f(peak)}`;
-    x += 10 + r() * 20;
-    d += ` L${f(x)} ${f(base - r() * L.a * H * .35)}`;
-  }
-  return `<path d="${d} L${W} ${H} Z" fill="${L.c}"/>`;
+function dots(r, n, c, { x0 = 0, x1 = W, y0 = 0, y1 = H, min = 1, max = 4 } = {}) {
+  let g = '';
+  for (let i = 0; i < n; i++) g += `<circle cx="${f(x0 + r() * (x1 - x0))}" cy="${f(y0 + r() * (y1 - y0))}" r="${f(min + r() * (max - min))}"/>`;
+  return `<g fill="${c}">${g}</g>`;
 }
-function hills(L, r) {
-  const base = L.y * H; let d = `M0 ${H} L0 ${f(base)}`; let x = 0;
-  while (x < W) {
-    const w = 70 + r() * 90, peak = base - (0.4 + r() * 0.6) * L.a * H;
-    d += ` Q${f(x + w / 2)} ${f(peak - L.a * H * .6)} ${f(x + w)} ${f(base - r() * L.a * H * .3)}`;
-    x += w;
+function rain(r, n, c, op = .4, { len = 46, slant = .28, width = 1.3 } = {}) {
+  let g = '';
+  for (let i = 0; i < n; i++) {
+    const x = r() * (W + 80) - 40, y = r() * H, l = len * (.5 + r());
+    g += `<path d="M${f(x)} ${f(y)}l${f(-l * slant)} ${f(l)}"/>`;
   }
-  return `<path d="${d} L${W} ${H} Z" fill="${L.c}"/>`;
+  return `<g stroke="${c}" stroke-width="${width}" opacity="${op}" fill="none">${g}</g>`;
 }
-function pines(L, r) {
-  const base = L.y * H; let out = `<rect x="0" y="${f(base)}" width="${W}" height="${f(H - base)}" fill="${L.c}"/>`;
-  let pts = '';
-  for (let x = -8; x < W + 8; x += 5 + r() * 9) {
-    const th = L.h * H * (0.45 + r() * 0.6), w = th * (0.2 + r() * 0.08), by = base + r() * 6;
-    pts += `<polygon points="${f(x)},${f(by - th)} ${f(x - w)},${f(by)} ${f(x + w)},${f(by)}"/>`;
+function pines(r, base, h, c, step = 26) {
+  let g = rect(0, base, W, H - base, c);
+  for (let x = -20; x < W + 20; x += step * (.6 + r() * .8)) {
+    const th = h * (.55 + r() * .55), w = th * (.17 + r() * .05), by = base + 6;
+    g += `<path d="M${f(x)} ${f(by - th)}L${f(x + w * .55)} ${f(by - th * .62)}L${f(x + w * .28)} ${f(by - th * .62)}L${f(x + w * .8)} ${f(by - th * .32)}L${f(x + w * .4)} ${f(by - th * .32)}L${f(x + w)} ${f(by)}L${f(x - w)} ${f(by)}L${f(x - w * .4)} ${f(by - th * .32)}L${f(x - w * .8)} ${f(by - th * .32)}L${f(x - w * .28)} ${f(by - th * .62)}L${f(x - w * .55)} ${f(by - th * .62)}Z" fill="${c}"/>`;
   }
-  return out + `<g fill="${L.c}">${pts}</g>`;
+  return g;
 }
-function windowsFor(x, y, w, h, color, r, dense) {
-  if (!color) return '';
-  let s = '';
-  for (let yy = y + 4; yy < y + h - 4; yy += 6) {
-    for (let xx = x + 3; xx < x + w - 3; xx += 5) {
-      if (r() < (dense ? .28 : .14)) s += `<rect x="${f(xx)}" y="${f(yy)}" width="2" height="2.6"/>`;
-    }
-  }
-  return s;
+function mosque(cx, base, rad, minH, c) {
+  let s = `<path d="M${cx - rad} ${base}A${rad} ${rad * 1.02} 0 0 1 ${cx + rad} ${base}Z"/>`;
+  s += `<rect x="${cx - 1.6}" y="${f(base - rad * 1.02 - 20)}" width="3.2" height="22"/>`;
+  s += `<path d="M${cx - rad * 1.7} ${base}A${rad * .62} ${rad * .62} 0 0 1 ${f(cx - rad * .46)} ${base}Z"/><path d="M${f(cx + rad * .46)} ${base}A${rad * .62} ${rad * .62} 0 0 1 ${cx + rad * 1.7} ${base}Z"/>`;
+  [-1.95, 1.95].forEach(k => {
+    const mx = cx + rad * k;
+    s += `<path d="M${f(mx - 6)} ${base}V${base - minH}L${f(mx)} ${base - minH - 44}L${f(mx + 6)} ${base - minH}V${base}Z"/><rect x="${f(mx - 10)}" y="${f(base - minH * .72)}" width="20" height="5"/><rect x="${f(mx - 9)}" y="${f(base - minH * .38)}" width="18" height="4"/>`;
+  });
+  return `<g fill="${c}">${s}</g>`;
 }
-function city(L, r) {
-  const base = L.y * H, x0 = (L.x0 ?? 0) * W, x1 = (L.x1 ?? 1) * W;
-  let b = '', w = '';
-  for (let x = x0 - 4; x < x1; ) {
-    const bw = 12 + r() * (L.tall ? 22 : 28);
-    const bh = L.h * H * (L.tall ? 0.3 + r() * 0.7 : 0.35 + r() * 0.65);
-    const top = base - bh;
-    b += `<rect x="${f(x)}" y="${f(top)}" width="${f(bw)}" height="${f(H - top)}"/>`;
-    if (L.tall && r() < .3) b += `<rect x="${f(x + bw / 2 - .6)}" y="${f(top - 10)}" width="1.2" height="10"/>`;
-    w += windowsFor(x, top, bw, Math.min(bh + 20, H - top), L.win, r, L.dense);
-    x += bw + (r() < .3 ? r() * 6 : 0);
-  }
-  return `<g fill="${L.c}">${b}</g>` + (L.win ? `<g fill="${L.win}" opacity=".85">${w}</g>` : '');
-}
-function ruins(L, r) {
-  const base = L.y * H, x0 = (L.x0 ?? 0) * W, x1 = (L.x1 ?? 1) * W;
-  let d = '';
-  for (let x = x0 - 4; x < x1; ) {
-    const bw = 14 + r() * 30, bh = L.h * H * (0.2 + r() * 0.8), top = base - bh;
-    const j1 = top + r() * bh * .4, j2 = top + r() * bh * .5;
-    d += `M${f(x)} ${H} L${f(x)} ${f(j1)} L${f(x + bw * .3)} ${f(top)} L${f(x + bw * .55)} ${f(j2)} L${f(x + bw * .75)} ${f(top + r() * 8)} L${f(x + bw)} ${f(j1 + 6)} L${f(x + bw)} ${H} Z `;
-    x += bw + r() * 10;
-  }
-  return `<path d="${d}" fill="${L.c}"/><rect x="0" y="${f(base)}" width="${W}" height="${f(H - base)}" fill="${L.c}"/>`;
-}
-function skyline(L, r) {
-  // Kubbeler ve minareler: bir Boğaz siluetini anımsatan genel bir şehir
-  const base = L.y * H; let s = `<rect x="0" y="${f(base)}" width="${W}" height="${f(H - base)}"/>`;
-  for (let x = -6; x < W; ) {
-    if (r() < .32) {
-      const rad = 14 + r() * 18, cx = x + rad + 10;
-      s += `<rect x="${f(cx - rad - 8)}" y="${f(base - rad * .7)}" width="${f(rad * 2 + 16)}" height="${f(rad * .7 + 1)}"/>`;
-      s += `<path d="M${f(cx - rad)} ${f(base - rad * .7)} A${f(rad)} ${f(rad * .95)} 0 0 1 ${f(cx + rad)} ${f(base - rad * .7)} Z"/>`;
-      s += `<path d="M${f(cx - rad - 8)} ${f(base - rad * .55)} A${f(rad * .5)} ${f(rad * .45)} 0 0 1 ${f(cx - rad + 4)} ${f(base - rad * .55)} Z"/>`;
-      s += `<path d="M${f(cx + rad - 4)} ${f(base - rad * .55)} A${f(rad * .5)} ${f(rad * .45)} 0 0 1 ${f(cx + rad + 8)} ${f(base - rad * .55)} Z"/>`;
-      s += `<rect x="${f(cx - .6)}" y="${f(base - rad * 1.75 - 6)}" width="1.2" height="7"/>`;
-      const mins = 2 + Math.floor(r() * 3);
-      for (let i = 0; i < mins; i++) {
-        const mx = cx + (i % 2 ? 1 : -1) * (rad + 12 + Math.floor(i / 2) * 9), mh = L.h * H * (0.9 + r() * 0.5);
-        s += `<rect x="${f(mx - 1.8)}" y="${f(base - mh)}" width="3.6" height="${f(mh)}"/>`;
-        s += `<polygon points="${f(mx - 2.2)},${f(base - mh)} ${f(mx + 2.2)},${f(base - mh)} ${f(mx)},${f(base - mh - 12)}"/>`;
-        s += `<rect x="${f(mx - 3)}" y="${f(base - mh * .72)}" width="6" height="1.6"/>`;
+const BOMBER = 'M0-44C4-38 5-22 5-10L58 6V13L5 9 4 30 18 38V43L0 40-18 43V38L-4 30-5 9-58 13V6L-5-10C-5-22-4-38 0-44Z';
+
+export const THEMES = {
+  /* Boş bir arma: haneyi oyuncu kuracak */
+  'kuzey': {
+    label: 'Kuzey ve arma',
+    bg: '#1c252c', ink: '#e7ebe8', accent: '#dfe5e3', on: '#1c252c', title: '#1c252c', pos: 'top',
+    font: "'Grenze Gotisch'", weight: 800, wf: .55,
+    art(r, id) {
+      const shield = 'M138 312H462V540C462 648 372 712 300 752 228 712 138 648 138 540Z';
+      return rect(0, 0, W, H, '#d9dedd')
+        + `<path d="M0 640L70 540 128 596 214 470 300 590 392 480 470 590 530 520 600 610V800H0Z" fill="#94a2a9"/>`
+        + `<clipPath id="s${id}"><path d="${shield}"/></clipPath>`
+        + `<g clip-path="url(#s${id})">${rect(100, 280, 200, 500, '#1c252c')}${rect(300, 280, 200, 500, '#a8231d')}
+           <path d="M100 590L300 420 500 590" fill="none" stroke="#d9dedd" stroke-width="50"/>${dots(r, 28, '#d9dedd', { y0: 300, y1: 760, min: 1.5, max: 4 })}</g>`
+        + `<path d="${shield}" fill="none" stroke="#1c252c" stroke-width="9" transform="translate(5 5)"/>`
+        + rect(0, 760, W, 40, '#1c252c')
+        + dots(r, 70, '#fff', { min: 1.5, max: 5.5 });
+    },
+  },
+  /* Her duvarın kulağı var: anahtar deliğinden görülen saray */
+  'baskent': {
+    label: 'Anahtar deliğinden saray',
+    bg: '#4c0b14', ink: '#f6e8d0', accent: '#eab347', on: '#2a0a08', title: '#eab347', pos: 'bottom',
+    font: "'Grenze Gotisch'", weight: 800, wf: .55,
+    art(r, id) {
+      let lat = '';
+      for (let i = -800; i < 800; i += 34) lat += `<path d="M${i} 0L${i + 800} 800M${i + 800} 0L${i} 800"/>`;
+      const hole = 'M300 118A132 132 0 0 1 366 364L424 590H176L234 364A132 132 0 0 1 300 118Z';
+      return rect(0, 0, W, H, '#7c1420')
+        + `<g stroke="#651019" stroke-width="2" fill="none">${lat}</g>`
+        + `<clipPath id="k${id}"><path d="${hole}"/></clipPath>`
+        + `<path d="${hole}" fill="#1c0a0e" transform="translate(10 10)"/>`
+        + `<g clip-path="url(#k${id})">${rect(120, 100, 360, 520, '#eab347')}${disc(300, 300, 74, '#f8dd97')}
+           <g fill="#1c0a0e"><path d="M170 600V440H196V410H214V440H246V360L268 310 290 360V400H312V300L340 232 368 300V420H396V380L416 340 436 380V600Z"/></g>
+           <g fill="#eab347">${[[262, 400], [335, 330], [335, 380], [410, 440], [205, 480], [300, 470], [350, 520]].map(([x, y]) => `<rect x="${x}" y="${y}" width="7" height="14"/>`).join('')}</g></g>`
+        + rect(0, 600, W, 200, '#4c0b14');
+    },
+  },
+  /* Şarap, mum ışığı, kadeh */
+  'meyhane': {
+    label: 'Mum ışığı ve kadeh',
+    bg: '#190f1e', ink: '#f2e6d2', accent: '#f0c25c', on: '#190f1e', title: '#f0c25c', pos: 'top',
+    font: "'Grenze Gotisch'", weight: 700, wf: .52,
+    art(r) {
+      return rect(0, 0, W, H, '#190f1e')
+        + disc(300, 480, 340, '#26172b') + disc(300, 480, 262, '#3a1f33') + disc(300, 480, 186, '#5c2a38')
+        + rect(0, 742, W, 58, '#0f0912')
+        + `<path d="M178 330H422C424 468 372 552 322 562V678C322 700 388 706 410 744H190C212 706 278 700 278 678V562C228 552 176 468 178 330Z" fill="#f0c25c"/>`
+        + `<path d="M196 402H404C392 480 348 538 300 540 252 538 208 480 196 402Z" fill="#8e1b3a"/>`
+        + `<path d="M196 402H404C360 420 240 420 196 402Z" fill="#b02a4e"/>`
+        + `<path d="M214 346C212 372 216 388 220 396" fill="none" stroke="#fff3cf" stroke-width="7" stroke-linecap="round"/>`
+        + dots(r, 26, '#f0c25c', { y0: 230, y1: 740, min: .8, max: 2.2 });
+    },
+  },
+  /* Yağmur, üç sıra çam, en karanlık sırada iki küçük ışık */
+  'sisli-orman': {
+    label: 'Sisli orman',
+    bg: '#17221e', ink: '#dfe6e0', accent: '#bdd0c5', on: '#17221e', title: '#17221e', pos: 'top',
+    font: "'Bodoni Moda'", weight: 600, wf: .5, style: 'italic',
+    art(r) {
+      return rect(0, 0, W, H, '#bcc7c0')
+        + pines(r, 470, 210, '#8fa19a', 22) + rect(0, 430, W, 90, '#bcc7c0', 'opacity=".38"')
+        + pines(r, 590, 280, '#566a64', 26) + rect(0, 550, W, 80, '#bcc7c0', 'opacity=".24"')
+        + pines(r, 720, 370, '#17221e', 34)
+        + `<g fill="#f2d675"><ellipse cx="398" cy="664" rx="4.4" ry="2.6"/><ellipse cx="414" cy="664" rx="4.4" ry="2.6"/></g>`
+        + rain(r, 170, '#22312c', .5, { len: 60, slant: .2, width: 1.2 });
+    },
+  },
+  /* Mektup getiren baykuş */
+  'buyulu-sato': {
+    label: 'Mektuplu baykuş',
+    bg: '#11153f', ink: '#f1ead6', accent: '#f0bf45', on: '#11153f', title: '#f0bf45', pos: 'bottom',
+    font: 'Almendra', weight: 700, wf: .6,
+    art(r) {
+      let feathers = '';
+      for (let row = 0; row < 4; row++) for (let c = -2 + (row % 2) * .5; c <= 2; c++) {
+        const x = 300 + c * 40, y = 388 + row * 34;
+        if (Math.abs(c) > 2 - row * .25) continue;
+        feathers += `<path d="M${x - 15} ${y}Q${x} ${y + 24} ${x + 15} ${y}"/>`;
       }
-      x = cx + rad + 30;
-    } else if (r() < .1) {
-      const tw = 10, th = L.h * H * 1.1;
-      s += `<rect x="${f(x)}" y="${f(base - th)}" width="${tw}" height="${f(th)}"/><polygon points="${f(x - 1)},${f(base - th)} ${f(x + tw + 1)},${f(base - th)} ${f(x + tw / 2)},${f(base - th - 16)}"/>`;
-      x += tw + 6;
-    } else {
-      const bw = 8 + r() * 16, bh = 6 + r() * L.h * H * .35;
-      s += `<rect x="${f(x)}" y="${f(base - bh)}" width="${f(bw)}" height="${f(bh)}"/>`;
-      x += bw;
-    }
-  }
-  return `<g fill="${L.c}">${s}</g>`;
-}
-function castle(L, r) {
-  const s = L.s || 1, cx = L.x * W, base = L.y * H;
-  const tower = (x, w, h, roof) => {
-    let t = `<rect x="${f(x - w / 2)}" y="${f(base - h)}" width="${f(w)}" height="${f(h + 40)}"/>`;
-    if (roof) t += `<polygon points="${f(x - w / 2 - 2)},${f(base - h)} ${f(x + w / 2 + 2)},${f(base - h)} ${f(x)},${f(base - h - w * 1.5)}"/>`;
-    else for (let i = 0; i < 3; i++) t += `<rect x="${f(x - w / 2 + i * (w / 2.5))}" y="${f(base - h - 4 * s)}" width="${f(w / 5)}" height="${f(4 * s)}"/>`;
-    return t;
-  };
-  let g = `<path d="M${f(cx - 90 * s)} ${H} Q${f(cx)} ${f(base - 6 * s)} ${f(cx + 90 * s)} ${H} Z"/>`;
-  g += `<rect x="${f(cx - 46 * s)}" y="${f(base - 34 * s)}" width="${f(92 * s)}" height="${f(60 * s)}"/>`;
-  for (let i = 0; i < 9; i++) g += `<rect x="${f(cx - 46 * s + i * 11 * s)}" y="${f(base - 38 * s)}" width="${f(5 * s)}" height="${f(4 * s)}"/>`;
-  g += tower(cx - 46 * s, 16 * s, 58 * s, L.roofs);
-  g += tower(cx + 46 * s, 16 * s, 52 * s, L.roofs);
-  g += tower(cx + 6 * s, 22 * s, 86 * s, L.roofs);
-  if (L.many) {
-    g += tower(cx - 24 * s, 11 * s, 70 * s, true);
-    g += tower(cx + 30 * s, 10 * s, 64 * s, true);
-    g += tower(cx - 66 * s, 12 * s, 40 * s, true);
-    g += tower(cx + 64 * s, 9 * s, 46 * s, true);
-  }
-  let win = '';
-  if (L.win) {
-    for (let i = 0; i < 14; i++) {
-      const wx = cx + (r() - .5) * 110 * s, wy = base - r() * 70 * s;
-      win += `<rect x="${f(wx)}" y="${f(wy)}" width="${f(2 * s)}" height="${f(3 * s)}"/>`;
-    }
-  }
-  return `<g fill="${L.c}">${g}</g>` + (win ? `<g fill="${L.win}">${win}</g>` : '');
-}
-function sea(L, r) {
-  const base = L.y * H; let lines = '';
-  for (let i = 0; i < 16; i++) {
-    const y = base + 3 + r() * (H - base - 6), x = r() * W, w = 10 + r() * 50;
-    lines += `<rect x="${f(x)}" y="${f(y)}" width="${f(w)}" height="1" opacity="${f(.15 + r() * .35)}"/>`;
-  }
-  return `<rect x="0" y="${f(base)}" width="${W}" height="${f(H - base)}" fill="${L.c}"/><g fill="${L.glint || '#fff'}">${lines}</g>`;
-}
-function volcano(L, r, id) {
-  const cx = L.x * W, base = L.y * H;
-  return `<radialGradient id="vg${id}" cx="50%" cy="100%" r="60%"><stop offset="0" stop-color="${L.glow}" stop-opacity=".8"/><stop offset="1" stop-color="${L.glow}" stop-opacity="0"/></radialGradient>
-  <ellipse cx="${f(cx)}" cy="${f(base - 96)}" rx="70" ry="48" fill="url(#vg${id})"/>
-  <path d="M${f(cx - 170)} ${H} L${f(cx - 20)} ${f(base - 94)} L${f(cx - 10)} ${f(base - 90)} L${f(cx + 2)} ${f(base - 98)} L${f(cx + 14)} ${f(base - 92)} L${f(cx + 170)} ${H} Z" fill="${L.c}"/>
-  <path d="M${f(cx - 8)} ${f(base - 92)} L${f(cx - 14)} ${f(base - 60)} L${f(cx - 4)} ${f(base - 40)}" stroke="${L.glow}" stroke-width="2" fill="none" opacity=".75"/>`;
-}
-function planes(L, r) {
-  let g = '';
-  for (let i = 0; i < L.n; i++) {
-    const x = 40 + r() * 320, y = 20 + r() * 90, sc = .5 + r() * .7;
-    g += `<g transform="translate(${f(x)} ${f(y)}) scale(${f(sc)})"><path d="M-22 0 L18 -1.6 L24 0 L18 1.6 Z M-4 -1 L-10 -18 L-4 -18 L6 -1 Z M-4 1 L-10 18 L-4 18 L6 1 Z M-20 -1 L-24 -7 L-21 -7 L-15 -1 Z M-20 1 L-24 7 L-21 7 L-15 1 Z"/></g>`;
-  }
-  return `<g fill="${L.c}">${g}</g>`;
-}
-function birds(L, r) {
-  let g = '';
-  for (let i = 0; i < L.n; i++) {
-    const x = 60 + r() * 280, y = 30 + r() * 70, s = 3 + r() * 4;
-    g += `<path d="M${f(x - s)} ${f(y)} Q${f(x - s / 2)} ${f(y - s * .7)} ${f(x)} ${f(y)} Q${f(x + s / 2)} ${f(y - s * .7)} ${f(x + s)} ${f(y)}"/>`;
-  }
-  return `<g fill="none" stroke="${L.c}" stroke-width="1.2" stroke-linecap="round">${g}</g>`;
-}
-function dragon(L) {
-  const x = L.x * W, y = L.y * H, s = L.s || 1;
-  return `<g transform="translate(${f(x)} ${f(y)}) scale(${f(s)})" fill="${L.c}">
-  <path d="M-34 4 Q-14 -2 0 2 Q14 -2 30 -6 L36 -10 L34 -4 Q22 2 6 6 Q-10 10 -34 4 Z"/>
-  <path d="M-6 2 Q-18 -26 -44 -30 Q-30 -20 -32 -12 Q-22 -14 -20 -6 Q-12 -6 -6 2 Z"/>
-  <path d="M6 2 Q8 -30 30 -38 Q22 -26 26 -20 Q16 -18 18 -10 Q10 -8 6 2 Z"/>
-  <path d="M-34 4 Q-46 8 -58 2 Q-48 10 -40 10 Z"/></g>`;
-}
-function fence(L, r) {
-  const base = L.y * H; let g = `<rect x="0" y="${f(base + 6)}" width="${W}" height="${f(H - base)}" fill="${L.c}"/>`, w = '';
-  let px = -10, py = base;
-  for (let x = 10; x < W + 20; x += 34 + r() * 16) {
-    const top = base - 14 - r() * 10;
-    g += `<path d="M${f(x)} ${f(base + 8)} L${f(x + (r() - .5) * 6)} ${f(top)}" stroke="${L.c}" stroke-width="2.4"/>`;
-    w += `<path d="M${f(px)} ${f(py)} Q${f((px + x) / 2)} ${f(top + 10)} ${f(x)} ${f(top + 2)}" />`;
-    w += `<path d="M${f(px)} ${f(py + 7)} Q${f((px + x) / 2)} ${f(top + 16)} ${f(x)} ${f(top + 9)}" />`;
-    px = x; py = top + 2;
-  }
-  return g + `<g fill="none" stroke="${L.c}" stroke-width=".8" stroke-dasharray="3 1.5">${w}</g>`;
-}
+      return rect(0, 0, W, H, '#11153f')
+        + dots(r, 90, '#f6efd8', { min: .7, max: 2.4 })
+        + `<path d="M178 186L150 92 252 150Z M422 186L450 92 348 150Z" fill="#eab63a"/>`
+        + `<path d="M150 214C186 132 414 132 450 214 492 340 448 528 300 566 152 528 108 340 150 214Z" fill="#eab63a"/>`
+        + `<path d="M138 300C94 372 112 490 192 536 158 456 148 380 138 300Z M462 300C506 372 488 490 408 536 442 456 452 380 462 300Z" fill="#b5801c"/>`
+        + `<g fill="none" stroke="#11153f" stroke-width="5" stroke-linecap="round">${feathers}</g>`
+        + disc(232, 262, 74, '#f6efd8') + disc(368, 262, 74, '#f6efd8') + disc(232, 262, 42, '#11153f') + disc(368, 262, 42, '#11153f') + disc(246, 248, 11, '#f6efd8') + disc(382, 248, 11, '#f6efd8')
+        + `<path d="M300 292L322 322 300 362 278 322Z" fill="#c8452f"/>`
+        + `<g transform="rotate(-4 300 590)">${rect(222, 548, 156, 92, '#f6efd8')}<path d="M222 548L300 602 378 548" fill="none" stroke="#11153f" stroke-width="3.5"/>${disc(300, 606, 15, '#c8452f')}</g>`
+        + `<g fill="#b5801c">${rect(254, 534, 12, 26)}${rect(334, 534, 12, 26)}</g>`;
+    },
+  },
+  /* Halkanın içinde ateş dağı */
+  'volkan': {
+    label: 'Halka ve ateş dağı',
+    bg: '#130b09', ink: '#f4e4d1', accent: '#f4602a', on: '#130b09', title: '#f7b32b', pos: 'bottom',
+    font: 'Almendra', weight: 700, wf: .6,
+    art(r) {
+      return rect(0, 0, W, H, '#130b09')
+        + disc(300, 318, 216, '#f0501e')
+        + `<circle cx="300" cy="318" r="252" fill="none" stroke="#f7b32b" stroke-width="30"/><circle cx="300" cy="318" r="228" fill="none" stroke="#130b09" stroke-width="5"/>`
+        + `<path d="M20 640L248 262 272 288 298 246 326 292 352 262 580 640Z" fill="#130b09"/>`
+        + `<path d="M298 262L280 340 316 396 286 470 322 540 296 618" fill="none" stroke="#f7b32b" stroke-width="9" stroke-linejoin="bevel"/><path d="M280 340L240 410M316 396L368 462M286 470L252 540" fill="none" stroke="#f0501e" stroke-width="6"/>`
+        + rect(0, 620, W, 180, '#130b09')
+        + dots(r, 46, '#f7b32b', { y0: 30, y1: 300, x0: 120, x1: 480, min: 1, max: 3.4 });
+    },
+  },
+  /* Işıldaklar ve bombardıman filosu */
+  'savas-gogu': {
+    label: 'Işıldaklar ve filo',
+    bg: '#141b24', ink: '#e8dec3', accent: '#e4d6b1', on: '#141b24', title: '#e4d6b1', pos: 'bottom',
+    font: "'Big Shoulders Stencil'", weight: 900, wf: .41,
+    art(r) {
+      const beam = (x, tx, w) => `<path d="M${x} 640L${tx - w} 0H${tx + w}Z" fill="#e4d6b1" opacity=".2"/>`;
+      const planes = [[182, 176, 1.25], [330, 94, .9], [440, 214, 1.1], [270, 310, 1.45], [486, 72, .62], [84, 70, .66], [108, 330, .72]];
+      return rect(0, 0, W, H, '#141b24')
+        + beam(90, 300, 44) + beam(300, 150, 34) + beam(330, 500, 50) + beam(540, 300, 40)
+        + planes.map(([x, y, s]) => `<path d="${BOMBER}" fill="#0a0e13" transform="translate(${x} ${y}) rotate(14) scale(${s})"/>`).join('')
+        + `<path d="M0 640V560H34V600H70V520L96 500V590H150V545H186V606H232V470L262 450 270 492V596H330V540L360 524V600H420V500H448L470 460V586H530V530H566V600H600V800H0Z" fill="#050709"/>`
+        + rect(0, 620, W, 180, '#050709');
+    },
+  },
+  /* Tel örgü ve gelincik */
+  'siper': {
+    label: 'Gelincik ve dikenli tel',
+    bg: '#221e17', ink: '#e9e0c9', accent: '#ea5140', on: '#160f0c', title: '#e9e0c9', pos: 'bottom',
+    font: "'Alfa Slab One'", weight: 400, wf: .66,
+    art(r) {
+      const wire = (y, sag) => {
+        let barbs = '';
+        for (let x = 30; x < W; x += 74) {
+          const t = x / W, yy = (1 - t) * (1 - t) * y + 2 * (1 - t) * t * (y + sag) + t * t * (y - 8);
+          barbs += `<path d="M${x - 9} ${f(yy - 10)}L${x + 9} ${f(yy + 10)}M${x + 9} ${f(yy - 10)}L${x - 9} ${f(yy + 10)}"/>`;
+        }
+        return `<path d="M0 ${y}Q300 ${y + sag} 600 ${y - 8}"/>${barbs}`;
+      };
+      return rect(0, 0, W, H, '#cdc1a1')
+        + `<path d="M300 318C306 410 292 500 300 640" fill="none" stroke="#221e17" stroke-width="7"/>`
+        + `<g fill="#c8281e"><ellipse cx="208" cy="242" rx="118" ry="104" transform="rotate(-18 208 242)"/><ellipse cx="392" cy="242" rx="118" ry="104" transform="rotate(18 392 242)"/><ellipse cx="300" cy="152" rx="124" ry="94"/><ellipse cx="300" cy="330" rx="112" ry="82"/></g>`
+        + `<g fill="none" stroke="#9a1c14" stroke-width="4"><path d="M300 240C256 196 214 176 150 170M300 240C344 196 386 176 450 170M300 240C248 262 214 300 190 332M300 240C352 262 386 300 410 332"/></g>`
+        + disc(300, 240, 40, '#221e17')
+        + `<g stroke="#cdc1a1" stroke-width="3">${Array.from({ length: 12 }, (_, i) => { const a = i * Math.PI / 6; return `<path d="M${f(300 + Math.cos(a) * 14)} ${f(240 + Math.sin(a) * 14)}L${f(300 + Math.cos(a) * 32)} ${f(240 + Math.sin(a) * 32)}"/>`; }).join('')}</g>`
+        + `<path d="M0 600C90 578 150 612 240 592 340 570 430 614 600 584V800H0Z" fill="#221e17"/>`
+        + `<g fill="none" stroke="#221e17" stroke-width="4.5">${wire(474, 50)}${wire(530, 34)}</g>`
+        + `<path d="M84 600L92 440M516 590L506 430" stroke="#221e17" stroke-width="13" fill="none"/>`;
+    },
+  },
+  /* Hastalıklı sarı gök, kırmızı güneş, ölü Boğaz */
+  'salgin': {
+    label: 'Sarı gök ve siluet',
+    bg: '#14130a', ink: '#eeeacb', accent: '#dcc920', on: '#14130a', title: '#14130a', pos: 'top',
+    font: "'Big Shoulders Stencil'", weight: 900, wf: .41,
+    art(r) {
+      let slits = '';
+      for (let i = 0; i < 26; i++) {
+        const y = 628 + i * 6.4, w = 30 + r() * 150 + (i < 12 ? 40 : 0);
+        slits += rect(f(340 + (r() - .5) * 220 - w / 2), f(y), f(w), 2.2, i % 3 ? '#dcc920' : '#c8321c');
+      }
+      return rect(0, 0, W, H, '#dcc920')
+        + disc(372, 430, 136, '#c8321c')
+        + mosque(218, 616, 92, 228, '#14130a') + mosque(486, 616, 58, 138, '#14130a')
+        + `<path d="M0 616V560H30V586H62V616ZM340 616V590H378V616Z" fill="#14130a"/>`
+        + rect(0, 612, W, 188, '#14130a') + slits
+        + rain(r, 18, '#14130a', .75, { len: 8, slant: -.3, width: 3 });
+    },
+  },
+  /* Boğaz köprüsü, neon tüpler */
+  'neon': {
+    label: 'Neon Boğaz',
+    bg: '#0c0717', ink: '#efe7ff', accent: '#ff46aa', on: '#12051c', title: '#ff74c0', pos: 'top',
+    font: "'Tilt Neon'", weight: 400, wf: .55, glow: true,
+    art(r) {
+      const glow = (d, c, w = 3.5) => `<path d="${d}" fill="none" stroke="${c}" stroke-width="${w * 4}" opacity=".16"/><path d="${d}" fill="none" stroke="${c}" stroke-width="${w}"/>`;
+      let towers = '';
+      [[34, 150, 44], [92, 86, 30], [130, 226, 26], [186, 118, 52], [262, 204, 22], [300, 96, 40], [362, 190, 34], [412, 70, 46], [478, 238, 28], [520, 130, 58]].forEach(([x, top, w]) => {
+        const y = top + 210;
+        towers += `<path d="M${x} 590V${y}H${x + w}V590"/>`;
+      });
+      let hang = '';
+      for (let x = 170; x < 450; x += 24) {
+        const t = (x - 130) / 340, y = 300 + 4 * 190 * (t - .5) * (t - .5);
+        hang += `M${x} ${f(y)}V556`;
+      }
+      let refl = '';
+      for (let i = 0; i < 34; i++) {
+        const y = 596 + r() * 200, x = r() * W, w = 14 + r() * 90;
+        refl += rect(f(x), f(y), f(w), 2.4, i % 2 ? '#ff46aa' : '#3ce6ea', `opacity="${f(.25 + r() * .6)}"`);
+      }
+      return rect(0, 0, W, H, '#0c0717')
+        + `<g fill="none" stroke="#3ce6ea" stroke-width="2.4" opacity=".75">${towers}</g>`
+        + `<path d="M366 590V286L378 232 390 286V590" fill="none" stroke="#3ce6ea" stroke-width="2.4"/>`
+        + glow(`M0 412Q70 372 130 300 300 560 470 300 530 372 600 412`, '#ff46aa')
+        + glow('M112 590V270H148V590M112 360H148M112 450H148', '#ff46aa', 4)
+        + glow('M452 590V270H488V590M452 360H488M452 450H488', '#ff46aa', 4)
+        + `<path d="${hang}" stroke="#ff46aa" stroke-width="1.4" opacity=".8"/>`
+        + glow('M0 556H600', '#3ce6ea', 4)
+        + refl
+        + rain(r, 70, '#b6a5ff', .22, { len: 40, slant: .1, width: 1 });
+    },
+  },
+  /* Başka bir dünyada, havada asılı mavi pencere */
+  'safak': {
+    label: 'Mavi pencere ve yeni dünya',
+    bg: '#272050', ink: '#f9ebde', accent: '#f8ab91', on: '#272050', title: '#fff1c8', pos: 'bottom',
+    font: "'Pixelify Sans'", weight: 600, wf: .56,
+    art() {
+      const bar = (y, w, c) => rect(146, y, 308, 14, '#10238f') + rect(146, y, w, 14, c);
+      return rect(0, 0, W, H, '#f9d6a8') + rect(0, 0, W, 150, '#f4b79c') + rect(0, 150, W, 90, '#f7c7a1')
+        + disc(300, 470, 118, '#fff1c8')
+        + `<path d="M0 520L90 420 170 492 262 386 350 490 452 400 540 480 600 440V800H0Z" fill="#b58bb8"/>`
+        + `<path d="M0 560L120 490 240 560 370 480 490 556 600 510V800H0Z" fill="#8d6bb0"/>`
+        + `<path d="M0 610C110 560 210 590 320 584 420 578 510 560 600 590V800H0Z" fill="#4f8a6a"/>`
+        + `<path d="M0 660C150 620 300 650 600 636V800H0Z" fill="#272050"/>`
+        + `<path d="M296 626l2-22-4-16 7-8 7 8-3 16 3 22Z" fill="#272050"/>`
+        + rect(120, 136, 372, 262, '#10238f', 'opacity=".35"')
+        + rect(108, 124, 372, 262, '#2340e6') + `<rect x="108" y="124" width="372" height="262" fill="none" stroke="#a9d6ff" stroke-width="5"/>`
+        + rect(108, 124, 372, 34, '#a9d6ff')
+        + bar(190, 216, '#ff5f6d') + bar(218, 132, '#5fe3a1') + bar(246, 60, '#ffd65f')
+        + [[146, 284, 210], [146, 306, 262], [146, 328, 150], [146, 350, 230]].map(([x, y, w]) => rect(x, y, w, 8, '#a9d6ff')).join('')
+        + rect(124, 136, 180, 10, '#2340e6');
+    },
+  },
+};
 
-function fxLayer(kind, r, id) {
-  let g = '';
-  if (kind === 'snow') {
-    for (let i = 0; i < 90; i++) g += `<circle cx="${f(r() * W)}" cy="${f(r() * H)}" r="${f(.5 + r() * 1.5)}" opacity="${f(.4 + r() * .6)}"/>`;
-    return `<g fill="#fff">${g}</g>`;
-  }
-  if (kind === 'rain') {
-    for (let i = 0; i < 110; i++) { const x = r() * W, y = r() * H, l = 6 + r() * 10; g += `<path d="M${f(x)} ${f(y)} l${f(-l * .25)} ${f(l)}"/>`; }
-    return `<g stroke="#e6eef5" stroke-width=".6" opacity=".35">${g}</g>`;
-  }
-  if (kind === 'embers') {
-    for (let i = 0; i < 60; i++) g += `<circle cx="${f(r() * W)}" cy="${f(r() * H)}" r="${f(.5 + r() * 1.3)}" opacity="${f(.4 + r() * .6)}"/>`;
-    return `<g fill="#ff9a4a">${g}</g>`;
-  }
-  if (kind === 'stars') {
-    for (let i = 0; i < 70; i++) g += `<circle cx="${f(r() * W)}" cy="${f(r() * H * .5)}" r="${f(.3 + r() * .9)}" opacity="${f(.3 + r() * .7)}"/>`;
-    return `<g fill="#fff">${g}</g>`;
-  }
-  if (kind === 'sparkles') {
-    let st = '';
-    for (let i = 0; i < 60; i++) st += `<circle cx="${f(r() * W)}" cy="${f(r() * H * .55)}" r="${f(.3 + r() * .8)}" opacity="${f(.3 + r() * .7)}"/>`;
-    for (let i = 0; i < 18; i++) { const x = r() * W, y = H * .5 + r() * H * .45, s = 1 + r() * 2; g += `<path d="M${f(x)} ${f(y - s * 2)} L${f(x + s * .5)} ${f(y)} L${f(x)} ${f(y + s * 2)} L${f(x - s * .5)} ${f(y)} Z M${f(x - s * 2)} ${f(y)} L${f(x)} ${f(y + s * .5)} L${f(x + s * 2)} ${f(y)} L${f(x)} ${f(y - s * .5)} Z" opacity="${f(.5 + r() * .5)}"/>`; }
-    return `<g fill="#fff">${st}</g><g fill="#ffd98a">${g}</g>`;
-  }
-  if (kind === 'smoke') {
-    for (let i = 0; i < 9; i++) g += `<ellipse cx="${f(r() * W)}" cy="${f(H * .35 + r() * H * .4)}" rx="${f(40 + r() * 60)}" ry="${f(14 + r() * 20)}" opacity="${f(.12 + r() * .18)}"/>`;
-    return `<filter id="bl${id}"><feGaussianBlur stdDeviation="9"/></filter><g fill="#2a2a24" filter="url(#bl${id})">${g}</g>`;
-  }
-  return '';
-}
+export const themeOf = key => THEMES[key] || THEMES.kuzey;
 
 export function coverSVG(themeKey, seed = 'x') {
-  const T = THEMES[themeKey] || THEMES['kuzey'];
+  const T = themeOf(themeKey);
   const r = rng(themeKey + '|' + seed);
-  const id = 'c' + (counter++);
-  const [s0, s1, s2] = T.sky;
-  let out = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-<defs>
-<linearGradient id="sky${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${s0}"/><stop offset=".6" stop-color="${s1}"/><stop offset="1" stop-color="${s2}"/></linearGradient>
-<radialGradient id="vig${id}" cx="50%" cy="45%" r="75%"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".55"/></radialGradient>
-${T.sun ? `<radialGradient id="sun${id}"><stop offset="0" stop-color="${T.sun.c}" stop-opacity="${T.sun.glow}"/><stop offset="1" stop-color="${T.sun.c}" stop-opacity="0"/></radialGradient>` : ''}
-${T.fog ? `<linearGradient id="fog${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${T.fog}" stop-opacity="0"/><stop offset="1" stop-color="${T.fog}" stop-opacity="${T.fogStrong ? .55 : .35}"/></linearGradient>` : ''}
-</defs>
-<rect width="${W}" height="${H}" fill="url(#sky${id})"/>`;
-  if (T.fx === 'stars' || T.fx === 'sparkles') out += fxLayer(T.fx === 'stars' ? 'stars' : 'none', r, id);
-  if (T.sun) {
-    const sx = T.sun.x * W, sy = T.sun.y * H;
-    out += `<circle cx="${f(sx)}" cy="${f(sy)}" r="${f(T.sun.r * 4)}" fill="url(#sun${id})"/><circle cx="${f(sx)}" cy="${f(sy)}" r="${T.sun.r}" fill="${T.sun.c}"/>`;
-  }
-  const fns = { mountains, hills, pines, city, ruins, skyline, castle, sea, volcano, planes, birds, dragon, fence };
-  T.layers.forEach((L, i) => {
-    out += (fns[L.t] ? fns[L.t](L, r, id + 'l' + i) : '');
-    if (T.fog && i < T.layers.length - 1 && L.y) {
-      out += `<rect x="0" y="${f(L.y * H - 40)}" width="${W}" height="60" fill="url(#fog${id})"/>`;
-    }
-  });
-  if (T.fx && T.fx !== 'stars') out += fxLayer(T.fx, r, id);
-  out += `<rect width="${W}" height="${H}" fill="url(#vig${id})"/></svg>`;
-  return out;
+  const id = 'p' + (counter++);
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${T.art(r, id)}</svg>`;
 }
