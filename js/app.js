@@ -646,6 +646,7 @@ function renderPlay(id) {
         <a class="top-text" href="#/" aria-label="Dünyalara dön" title="Dünyalara dön">${I.back}<span>Dünyalar</span></a>
         <div class="play-title"><strong>${esc(scen.title)}</strong><span id="save-label">${esc(save.label)}</span></div>
         <div class="play-spacer"></div>
+        <button class="top-text" data-act="advisor" aria-label="Danışmana sor" title="Danışmana sor">${I.advisor}<span>Danışman</span></button>
         <button class="top-text" data-act="toggle-panel" aria-label="Defter: durum ve hafıza" title="Durum ve hafıza">${I.panel}<span>Defter</span></button>
         <button class="top-text" data-act="settings" aria-label="Ayarlar" title="Ayarlar">${I.gear}<span>Ayarlar</span></button>
       </header>
