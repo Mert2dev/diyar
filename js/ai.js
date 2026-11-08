@@ -23,6 +23,14 @@ export const PROVIDERS = {
     steps: ['openrouter.ai adresinde hesap aç.', 'Keys sayfasından yeni anahtar oluştur.', 'Anahtarı yapıştır ve listeden ":free" ile biten bir model seç.'],
     base: 'https://openrouter.ai/api/v1',
   },
+  mistral: {
+    label: 'Mistral',
+    note: 'Ücretsiz "Experiment" planı, kredi kartı istemez. Aylık limiti çok yüksek, Türkçesi iyi. Gemini dolunca en güçlü yedek.',
+    keyUrl: 'https://console.mistral.ai/api-keys',
+    steps: ['console.mistral.ai adresinde ücretsiz hesap aç (telefon doğrulaması isteyebilir).', 'Plan olarak ücretsiz "Experiment" seç.', '"API Keys" sayfasından yeni anahtar oluşturup aşağıya yapıştır.'],
+    base: 'https://api.mistral.ai/v1',
+    fallbackModel: 'mistral-small-latest',
+  },
   custom: {
     label: 'Özel adres',
     note: 'OpenAI uyumlu herhangi bir servis (ör. bilgisayarında çalışan LM Studio).',
@@ -31,11 +39,19 @@ export const PROVIDERS = {
   },
 };
 
+/** Anahtar istemeyen son çare servisleri. Yavaştırlar ve Türkçeleri zayıftır; yalnızca diğerleri dolunca kullanılır. */
+export const KEYLESS = {
+  llm7: { label: 'LLM7 (anahtarsız)', base: 'https://api.llm7.io/v1', models: ['gpt-oss:20b', 'nemotron-3-nano:30b', 'mistral-Nemo-Instruct-2407'] },
+  pollinations: { label: 'Pollinations (anahtarsız)', url: 'https://text.pollinations.ai/openai', models: ['openai-fast'] },
+};
+export const providerLabel = p => (PROVIDERS[p] || KEYLESS[p])?.label || p;
+
 export class AIError extends Error {
   constructor(msg, kind = 'genel') { super(msg); this.kind = kind; }
 }
 
 function baseUrl(s) {
+  if (KEYLESS[s.provider]) return KEYLESS[s.provider].base;
   if (s.provider === 'custom') return (s.customBase || '').replace(/\/+$/, '');
   return PROVIDERS[s.provider].base;
 }
@@ -58,7 +74,7 @@ async function friendlyError(res, model) {
   try { const j = JSON.parse(body); msg = j.error?.message || j.message || body; } catch {}
   const low = String(msg).toLowerCase();
   if (res.status === 413 || /request too large|context.?length|too many tokens|maximum context|tokens? per minute.*requested/.test(low)) return new AIError('İstek bu model için fazla uzun.', 'cok-buyuk');
-  if (res.status === 429) return new AIError('Ücretsiz kullanım limitine takıldın. Bir dakika bekleyip tekrar dene; günlük limit dolduysa ayarlardan başka bir model ya da servis seç.', 'limit');
+  if (res.status === 429 || res.status === 402 || /free.?limit|rate.?limit|quota/.test(low)) return new AIError('Ücretsiz kullanım limitine takıldın. Bir dakika bekleyip tekrar dene; günlük limit dolduysa ayarlardan başka bir model ya da servis seç.', 'limit');
   if (low.includes('api key not valid') || low.includes('api_key_invalid') || res.status === 401) return new AIError('API anahtarı geçersiz görünüyor. Ayarlar\'dan anahtarı kontrol et.', 'anahtar');
   if (res.status === 403) return new AIError('Servis bu anahtarla erişime izin vermedi. Anahtarın doğru servise ait olduğundan emin ol.', 'anahtar');
   if (res.status === 404) return new AIError(`"${model}" modeli bulunamadı. Ayarlar\'dan model listesini yenileyip başka bir model seç.`, 'model');
@@ -103,7 +119,7 @@ export async function* streamChat({ settings, system, history, signal, temperatu
   const s = settings;
   const k = key(s);
   const model = s.models?.[s.provider];
-  if (s.provider !== 'custom' && !k) throw new AIError('Oynamak için önce Ayarlar\'dan ücretsiz bir API anahtarı eklemelisin.', 'anahtar-yok');
+  if (s.provider !== 'custom' && !KEYLESS[s.provider] && !k) throw new AIError('Oynamak için önce Ayarlar\'dan ücretsiz bir API anahtarı eklemelisin.', 'anahtar-yok');
   if (!model) throw new AIError('Ayarlar\'dan bir model seç.', 'model');
   const temp = temperature ?? s.temperature ?? 0.9;
 
@@ -160,7 +176,7 @@ export async function* streamChat({ settings, system, history, signal, temperatu
   if (s.provider === 'openrouter') { headers['X-Title'] = 'Diyar'; }
   const payload = { model, messages, temperature: temp, stream: true };
   if (maxTokens) payload.max_tokens = maxTokens;
-  const res = await doFetch(`${baseUrl(s)}/chat/completions`, {
+  const res = await doFetch(KEYLESS[s.provider]?.url || `${baseUrl(s)}/chat/completions`, {
     method: 'POST', headers, signal,
     body: JSON.stringify(payload),
   });
@@ -186,6 +202,7 @@ export async function complete(opts) {
 
 /** Kullanılabilir modelleri listeler: [{id, label}] */
 export async function listModels(s) {
+  if (KEYLESS[s.provider]) return KEYLESS[s.provider].models.map(id => ({ id, label: id }));
   const k = key(s);
   if (s.provider === 'gemini') {
     if (!k) throw new AIError('Önce API anahtarını gir.', 'anahtar-yok');
@@ -206,6 +223,7 @@ export async function listModels(s) {
   const j = await res.json();
   let list = (j.data || []).map(m => ({ id: m.id, label: m.name || m.id, ctx: m.context_length || m.context_window || 0, free: m.pricing ? (+m.pricing.prompt === 0 && +m.pricing.completion === 0) : undefined }));
   if (s.provider === 'openrouter') list = list.filter(m => m.id.endsWith(':free') || m.free);
+  if (s.provider === 'mistral') list = list.filter(m => !/(embed|ocr|moderation|transcri|voxtral|codestral|devstral|pixtral|saba)/i.test(m.id));
   if (s.provider === 'groq') list = list.filter(m => !/(whisper|tts|guard|embed|playai|orpheus)/i.test(m.id));
   return list.sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -226,6 +244,10 @@ export function rankModels(provider, list) {
     };
     return [...ids].sort((a, b) => tier(a) - tier(b) || num(a, b));
   }
+  if (provider === 'mistral') {
+    const tier = id => /^mistral-medium-latest$/.test(id) ? 0 : /^mistral-large-latest$/.test(id) ? 1 : /^mistral-small-latest$/.test(id) ? 2 : /latest$/.test(id) ? 3 : 4;
+    return [...ids].sort((a, b) => tier(a) - tier(b) || num(a, b));
+  }
   const first = pickDefaultModel(provider, list);
   return [first, ...ids.filter(id => id !== first)].filter(Boolean);
 }
@@ -244,6 +266,8 @@ export function pickDefaultModel(provider, list) {
   if (provider === 'groq') {
     return ids.find(id => id === PROVIDERS.groq.fallbackModel) || ids.find(id => /llama.*70b/i.test(id)) || ids.find(id => /llama/i.test(id)) || ids[0] || '';
   }
+  if (provider === 'mistral') return rankModels('mistral', list)[0] || PROVIDERS.mistral.fallbackModel;
+  if (KEYLESS[provider]) return KEYLESS[provider].models[0];
   if (provider === 'openrouter') {
     const pref = [/deepseek.*(chat|v3)/i, /llama.*70b/i, /gemini/i, /qwen/i, /mistral/i];
     for (const p of pref) { const hit = ids.find(id => p.test(id)); if (hit) return hit; }

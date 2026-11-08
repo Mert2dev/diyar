@@ -127,6 +127,8 @@ export function contextBudget({ provider, model = '', ctx = 0, scale = 1 }) {
     else { total = 80000; sumWords = 1200; }
   } else if (provider === 'groq') { total = 6500; sumWords = 350; }
   else if (provider === 'openrouter') { total = 14000; sumWords = 600; }
+  else if (provider === 'mistral') { total = 30000; sumWords = 900; }
+  else if (provider === 'pollinations') { total = 8000; sumWords = 450; }
   else { total = 12000; sumWords = 600; }
   if (ctx > 0) total = Math.min(total, Math.floor(ctx * 0.7));
   total = Math.max(2500, Math.floor(total * scale));

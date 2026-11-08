@@ -1,7 +1,7 @@
 import { SCENARIOS, CATEGORIES, SHELVES } from './scenarios.js';
 import { coverSVG, THEMES, themeOf } from './covers.js';
 import { SceneStage, SCENE_STYLES, parseScenes, parseCards, parseSceneTag, sceneTagRe, sceneProblem, composeScene, applyCards, castOf, withEdits, visualAnchor, keepsDistance } from './scenes.js';
-import { PROVIDERS, AIError, streamChat, complete, listModels, pickDefaultModel, rankModels } from './ai.js';
+import { PROVIDERS, KEYLESS, providerLabel, AIError, streamChat, complete, listModels, pickDefaultModel, rankModels } from './ai.js';
 import {
   approxTokens, cur, stripThink, TAG_CUT, stripScenes, stripCards, splitOutput, ledgerOf, ledgerText, contextBudget, fitHistory, compactOverflow,
   summaryPlan, recall, properNames, acceptableSummary, rewindSummary, qualityIssue, isLooping, removeRepeats, trimToSentence,
@@ -231,8 +231,8 @@ function setupLines(save, scen) {
   }).filter(Boolean).join('\n');
 }
 
-function budgetNow(scale = 1) {
-  const provider = settings.provider, model = settings.models[provider] || '';
+function budgetNow(scale = 1, route = null) {
+  const provider = route?.p || settings.provider, model = route?.model || settings.models[provider] || '';
   const ctx = (settings.modelLists[provider] || []).find(m => m.id === model)?.ctx || 0;
   return contextBudget({ provider, model, ctx, scale });
 }
@@ -348,8 +348,8 @@ function buildHistory(save, scen, uptoIdx, budget, systemTokens) {
 }
 
 /** Sistem talimatı ile geçmişi birlikte hazırlar: eski sahne hatırlama, bağlama girmeyen mesajlara bakar */
-function buildContext(save, scen, idx, scale) {
-  const budget = budgetNow(scale);
+function buildContext(save, scen, idx, scale, route) {
+  const budget = budgetNow(scale, route);
   const query = memoryQuery(save, idx);
   let system = buildSystem(save, scen, idx, budget, query);
   const { history, firstKept } = buildHistory(save, scen, idx, budget, approxTokens(system));
@@ -470,7 +470,7 @@ function renderHome() {
   app.innerHTML = `
   <div class="home">
     ${topbar(`<label class="search">${I.search}<input type="search" id="q" placeholder="Dünya, karakter ya da konu ara" value="${esc(homeState.q)}" aria-label="Senaryo ara"></label>`)}
-    ${!hasKey() ? `<div class="key-strip"><span>Diyar, ücretsiz bir Google Gemini anahtarıyla çalışır. Almak bir dakika sürer.</span><button data-act="settings">Anahtarı ekle</button></div>` : ''}
+    ${!hasKey() ? `<div class="key-strip"><span>Anahtarsız da oynayabilirsin, ama ücretsiz bir Google Gemini anahtarıyla hikaye çok daha iyi yazılır. Almak bir dakika sürer.</span><button data-act="settings">Anahtarı ekle</button></div>` : ''}
     <header class="mast" id="mast">
       <h1 class="mast-word">Diyar</h1>
       <div class="mast-say">
@@ -979,13 +979,13 @@ function openAdvisor() {
 async function askAdvisor(text) {
   const me = P; if (!me || (me.adv && !me.adv.error)) return;
   const { save, scen } = me;
-  if (!hasKey()) { closeModal(true); openSettings('Danışmanı kullanmak için bir API anahtarı ekle.'); return; }
+  if (!hasKey() && settings.backup === false) { closeModal(true); openSettings('Danışmanı kullanmak için bir API anahtarı ekle.'); return; }
   me.adv = { q: text, out: '' };
   renderAdvisor();
   const live = () => P === me && $('#adv-log');
   const fail = msg => { me.adv.error = msg; if (live()) { renderAdvisor(); const inp = $('#adv-input'); if (inp && !inp.value) inp.value = text; } };
   try {
-    if (!(await ensureModel())) return fail('Model seçilemedi. Ayarlar\'dan anahtarını ve modelini kontrol et.');
+    if (hasKey()) await ensureModel();
     // Yalnızca user/model sırası bozulmasın: ardışık aynı rolleri birleştir, user ile başla
     const history = [];
     for (const m of [...save.advisor, { role: 'user', text }].slice(-24)) {
@@ -994,7 +994,7 @@ async function askAdvisor(text) {
     }
     while (history.length && history[0].role !== 'user') history.shift();
     let out = '';
-    for await (const t of streamChat({ settings, system: advisorSystem(save, scen, text), history, temperature: 0.6, maxTokens: 700, signal: AbortSignal.timeout(60000) })) {
+    for await (const t of streamAny({ system: advisorSystem(save, scen, text), history, temperature: 0.6, maxTokens: 700, signal: AbortSignal.timeout(90000) }, { maxTries: 6 })) {
       out += t; me.adv.out = advClean(out);
       if (live()) renderAdvisor();
     }
@@ -1019,6 +1019,74 @@ function sendUser(text, cont = false) {
   generate('new');
 }
 
+/* ---------- kesintisiz yedek: servisler ve modeller arasında otomatik geçiş ---------- */
+const cool = store.get('cool', {});
+const routeKey = (p, m) => p + '|' + m;
+const isCool = (p, m) => (cool[routeKey(p, m)]?.until || 0) > Date.now();
+/** Hata veren modeli bir süre atla: limit dolunca 2 dk'dan başlayıp 1 saate kadar, bulunamayan model 1 gün */
+function markBad(p, m, kind) {
+  const k = routeKey(p, m), c = cool[k] || { n: 0 };
+  c.n++;
+  const min = kind === 'model' ? 24 * 60 : (kind === 'anahtar' || kind === 'anahtar-yok') ? 30 : Math.min(60, 2 * 2 ** (c.n - 1));
+  c.until = Date.now() + min * 60000; cool[k] = c; store.set('cool', cool);
+}
+function markGood(p, m) { if (cool[routeKey(p, m)]) { delete cool[routeKey(p, m)]; store.set('cool', cool); } }
+const hasKeyFor = p => KEYLESS[p] ? true : p === 'custom' ? !!settings.customBase : !!(settings.keys[p] || '').trim();
+const routeSettings = r => ({ ...settings, provider: r.p, models: { ...settings.models, [r.p]: r.model } });
+const routeLabel = r => r.p === settings.provider ? r.model : `${r.model} (${providerLabel(r.p)})`;
+
+async function modelsFor(p) {
+  if (KEYLESS[p]) return KEYLESS[p].models;
+  let list = settings.modelLists[p];
+  if (!list?.length) {
+    try { list = await listModels({ ...settings, provider: p }); settings.modelLists[p] = list; saveSettings(); }
+    catch { return [settings.models[p] || PROVIDERS[p].fallbackModel].filter(Boolean); }
+  }
+  const ranked = rankModels(p, list);
+  const saved = settings.models[p];
+  return saved && ranked.includes(saved) ? [saved, ...ranked.filter(x => x !== saved)] : ranked;
+}
+
+/** Denenecek sıra: seçili servis, anahtarı olan diğer servisler, en son anahtarsız yedekler. Yakın zamanda hata verenler atlanır. */
+async function routePlan({ keyless = true } = {}) {
+  const main = settings.provider;
+  const order = [main, ...Object.keys(PROVIDERS).filter(p => p !== main && p !== 'custom')].filter(hasKeyFor);
+  if (keyless && settings.backup !== false) order.push(...Object.keys(KEYLESS));
+  const plan = [], all = [];
+  for (const p of order) {
+    const ms = (await modelsFor(p)).slice(0, 8);
+    const per = p === main ? 4 : KEYLESS[p] ? 2 : 3;
+    all.push(...ms.slice(0, 1).map(model => ({ p, model })));
+    plan.push(...ms.filter(m => !isCool(p, m)).slice(0, per).map(model => ({ p, model })));
+  }
+  return plan.length ? plan : all;   // hepsi beklemedeyse yine de birer kez dene
+}
+
+/** Arka plan işleri (özet, defter, danışman) için: biri hata verirse sıradakine geçen akış */
+async function* streamAny(opts, { keyless = true, maxTries = 4, onSwitch } = {}) {
+  const plan = (await routePlan({ keyless })).slice(0, maxTries);
+  if (!plan.length) throw new AIError('Önce Ayarlar\'dan ücretsiz bir API anahtarı ekle.', 'anahtar-yok');
+  const skip = new Set();
+  let last = null, first = true;
+  for (const r of plan) {
+    if (skip.has(r.p)) continue;
+    if (!first) onSwitch?.(r);
+    first = false;
+    let got = false;
+    try {
+      for await (const t of streamChat({ ...opts, settings: routeSettings(r) })) { got = true; yield t; }
+      markGood(r.p, r.model);
+      return;
+    } catch (e) {
+      if (got || e.name === 'AbortError' || e.name === 'TimeoutError') throw e;
+      last = e; markBad(r.p, r.model, e.kind);
+      if (['anahtar', 'anahtar-yok', 'ag'].includes(e.kind)) skip.add(r.p);
+    }
+  }
+  throw last || new AIError('Hiçbir servis cevap vermedi.', 'model');
+}
+async function completeAny(opts, o) { let out = ''; for await (const t of streamAny(opts, o)) out += t; return out; }
+
 async function nextModel(tried) {
   const p = settings.provider;
   let list = settings.modelLists[p];
@@ -1032,15 +1100,17 @@ async function generate(kind = 'new') {
   if (!P || P.busy) return;
   const { save, scen } = P;
   P.error = null;
-  if (!hasKey()) {
+  if (!hasKey() && settings.backup === false) {
     P.error = { message: 'Oynamak için önce Ayarlar\'dan ücretsiz bir API anahtarı eklemelisin.', kind: 'anahtar-yok' };
     renderStory(true); openSettings('Oyunu başlatmak için bir API anahtarı ekle. Ekledikten sonra "Tekrar dene"ye bas.');
     return;
   }
   const me = P;
   P.busy = true; updateComposer(); renderOptions();
-  if (!(await ensureModel())) { me.busy = false; if (P !== me) return; P.error = { message: 'Model seçilemedi. Ayarlar\'dan anahtarını ve modelini kontrol et.', kind: 'model' }; updateComposer(); renderStory(true); return; }
+  if (hasKey()) await ensureModel();
+  const plan = P === me ? await routePlan() : [];
   if (P !== me) return;
+  if (!plan.length) { me.busy = false; P.error = { message: 'Kullanılabilir bir yapay zeka yok. Ayarlar\'dan ücretsiz bir API anahtarı ekle.', kind: 'anahtar-yok' }; updateComposer(); renderStory(true); return; }
 
   let m;
   if (kind === 'regen') { m = lastMsg(); if (!m || m.role !== 'model') { P.busy = false; updateComposer(); return; } m.alts.push(''); m.ai = m.alts.length - 1; }
@@ -1056,11 +1126,9 @@ async function generate(kind = 'new') {
   const prevReply = [...save.messages.slice(0, idx)].reverse().find(x => x.role === 'model');
   const prevText = prevReply ? splitOutput(cur(prevReply)).visible : '';
   const baseCast = withEdits(castOf(save.messages, idx), save.castEdits);
-  const prov = settings.provider;
-  const original = settings.models[prov];
-  const tried = new Set();
-  const FIRST_LIMIT = 35, STALL_LIMIT = 40, MAX_TRIES = 5;
-  const NO_RETRY = ['anahtar', 'anahtar-yok', 'ag', 'filtre'];
+  let ri = 0, route = plan[0], tries = 0;
+  const skipProv = new Set();
+  const FIRST_LIMIT = 35, STALL_LIMIT = 40, MAX_TRIES = 10;
   let raw = '', pending = false, error = null, timedOut = false, stopped = false, looped = false, truncated = false;
   let scale = 1, qualityRetried = false, qualityNote = '';
 
@@ -1083,15 +1151,15 @@ async function generate(kind = 'new') {
   };
 
   while (true) {
-    tried.add(settings.models[prov]);
+    tries++;
     const ctrl = new AbortController();
     P.ctrl = ctrl;
     timedOut = false; error = null; looped = false; truncated = false;
-    const { system, history } = buildContext(save, scen, idx, scale);
+    const { system, history } = buildContext(save, scen, idx, scale, route);
     if (qualityNote) history[history.length - 1].text += '\n\n' + qualityNote;
     const started = Date.now();
     let lastChunk = started;
-    const label = settings.models[prov];
+    const label = routeLabel(route);
     const watch = setInterval(() => {
       const now = Date.now();
       if (!raw) {
@@ -1101,7 +1169,7 @@ async function generate(kind = 'new') {
       } else if (now - lastChunk > STALL_LIMIT * 1000) { timedOut = true; ctrl.abort(); }
     }, 1000);
     try {
-      const opts = { settings, system, history, signal: ctrl.signal, maxTokens: OUTPUT_TOKENS[settings.length] || OUTPUT_TOKENS.orta, onFinish: r => { if (r === 'length') truncated = true; } };
+      const opts = { settings: routeSettings(route), system, history, signal: ctrl.signal, maxTokens: OUTPUT_TOKENS[settings.length] || OUTPUT_TOKENS.orta, onFinish: r => { if (r === 'length') truncated = true; } };
       for await (const chunk of streamChat(opts)) {
         lastChunk = Date.now();
         raw += chunk; m.alts[m.ai] = raw;
@@ -1136,21 +1204,32 @@ async function generate(kind = 'new') {
     if (looped) { raw = removeRepeats(raw); m.alts[m.ai] = raw; looped = false; break; }
     if (!error && !timedOut) break;                                       // başarılı
     if (raw.trim()) break;                                                // yarım cevap var, model değiştirme
-    if (error && NO_RETRY.includes(error.kind)) break;
-    if (tried.size >= MAX_TRIES || P !== me) break;
-    const next = await nextModel(tried);
-    if (!next || P !== me) break;
-    settings.models[prov] = next;
-    node.innerHTML = `<p class="loading">${esc(label)} yanıt vermedi, ${esc(next)} deneniyor</p>`;
+    // Bu model şimdilik dolu ya da bozuk: bir süre atla, sıradaki modele ya da servise geç
+    markBad(route.p, route.model, timedOut ? 'zaman' : error?.kind);
+    if (error && ['anahtar', 'anahtar-yok', 'ag'].includes(error.kind)) skipProv.add(route.p);
+    if (error?.kind === 'ag' && navigator.onLine === false) break;
+    if (tries >= MAX_TRIES || P !== me) break;
+    let next;
+    while ((next = plan[++ri]) && skipProv.has(next.p));
+    if (!next) break;
+    route = next;
+    node.innerHTML = `<p class="loading">${esc(label)} yanıt vermedi, ${esc(routeLabel(route))} deneniyor</p>`;
   }
-  if (!error && !timedOut && !stopped && raw.trim() && settings.models[prov] !== original) saveSettings();   // çalışan modeli hatırla
-  else if (settings.models[prov] !== original && (error || timedOut || !raw.trim())) settings.models[prov] = original;
-  if (timedOut || (error && tried.size > 1)) {
+  if (!error && !timedOut && !stopped && raw.trim()) {
+    markGood(route.p, route.model);
+    // Seçili servisin çalışan modelini hatırla; başka servise geçildiyse oyuncuya bir kez söyle
+    if (route.p === settings.provider && settings.models[route.p] !== route.model) { settings.models[route.p] = route.model; saveSettings(); }
+    if (route.p !== settings.provider && me.lastProv !== route.p) toast(hasKey()
+      ? `${providerLabel(settings.provider)} şu an cevap vermiyor, ${providerLabel(route.p)} ile devam edildi.`
+      : 'Anahtarsız yedek servisle oynuyorsun. Daha iyi Türkçe için Ayarlar\'dan ücretsiz Gemini anahtarı ekle.');
+    me.lastProv = route.p;
+  }
+  if (timedOut || (error && tries > 1)) {
     const lastMsg_ = error?.message;
-    error = { kind: tried.size > 1 ? 'model' : (error?.kind || 'model'), message: raw
+    error = { kind: tries > 1 ? 'model' : (error?.kind || 'model'), message: raw
       ? 'Cevap yarıda takıldı. "Tekrar dene"ye bas.'
-      : (tried.size > 1
-        ? `Denenen ${tried.size} modelin hiçbiri cevap vermedi. Ücretsiz katman şu an çok yoğun olabilir. Bir dakika sonra tekrar dene ya da Ayarlar'dan Groq anahtarı ekle (hızlı ve ücretsiz).${lastMsg_ ? ' Son hata: ' + lastMsg_ : ''}`
+      : (tries > 1
+        ? `Denenen ${tries} modelin hiçbiri cevap vermedi. Ücretsiz limitler dolmuş olabilir; dolan modeller bir süre atlanıp kendiliğinden geri gelir. Takılmadan oynamak için Ayarlar → Kesintisiz oyun bölümünden Groq ve Mistral gibi ücretsiz anahtarlar ekle.${lastMsg_ ? ' Son hata: ' + lastMsg_ : ''}`
         : `Yapay zeka ${FIRST_LIMIT} saniyedir cevap vermedi. "Çalışan modeli bul"a bas.`) };
   }
   // Çıktı sınırına takıldıysa yarım cümleyle bitmesin
@@ -1190,11 +1269,11 @@ async function repairReply(me, m, ooc) {
   if (needScene) ask.push(`Bu metnin ilk anı için görsel etiketleri. Metinde görünen ve aşağıdaki listede olmayan önemli karakterler için bir kez <karakter>Ad | English look, 10-18 words</karakter>, sonra <sahne kim="Ad">English, 15-28 words, starts with a camera angle, only what the text literally shows, no proper names, fully clothed, no blood</sahne>. Bilinen karakterler:\n${castLines(cast, visible) || '(yok)'}`);
   if (needLedger) ask.push('Hikaye hafızası bloğu: <defter> ... </defter>. İçinde en fazla 5 satır. "+ metin" ileride önemli olacak yeni gerçek (kişi, söz, borç, yara, eşya, karar, sır, yer, zaman), "! metin" gecikmeli sonuç ve yaklaşık zamanı, "? metin" çözülmemiş mesele. Türkçe, kısa.');
   try {
-    const out = await complete({
-      settings, temperature: 0.2, signal: AbortSignal.timeout(30000),
+    const out = await completeAny({
+      temperature: 0.2, signal: AbortSignal.timeout(30000),
       system: 'Bir hikaye oyununun kayıt memurusun. Yalnızca istenen etiketli blokları yaz; açıklama, giriş cümlesi ya da hikaye metni yazma.',
       history: [{ role: 'user', text: `Oyuncunun son hamlesi: ${[...me.save.messages.slice(0, idx)].reverse().find(x => x.role === 'user')?.text || '(açılış)'}\n\nAnlatıcının cevabı:\n${visible}\n\nİstenenler:\n- ${ask.join('\n- ')}` }],
-    });
+    }, { keyless: false });
     if (m.alts[m.ai] !== raw) return;   // bu arada oyuncu yeniden yazdırdıysa dokunma
     let head = '', tail = '';
     if (needScene) {
@@ -1234,11 +1313,11 @@ async function maybeSummarize() {
     : 'ANLATICI: ' + stripScenes(splitOutput(cur(m)).visible)).filter(Boolean).join('\n\n');
   me.summarizing = true; renderPanel();
   try {
-    const text = await complete({
-      settings, temperature: 0.2, signal: AbortSignal.timeout(90000),
+    const text = await completeAny({
+      temperature: 0.2, signal: AbortSignal.timeout(90000),
       system: 'Sen uzun soluklu bir rol yapma oyununun arşivcisisin. Görevin hikayenin hafızasını eksiksiz ve kısa tutmak. Sadece Türkçe özet yaz.',
       history: [{ role: 'user', text: `Senaryo: ${scen.title}\nOyuncunun seçimleri:\n${setupLines(save, scen)}\n\nŞimdiye kadarki özet:\n${save.summary || '(henüz yok)'}\n\nYeni olaylar:\n${chunk}\n\nBu ikisini birleştirerek güncel ve eksiksiz bir hikaye özeti yaz. Eski özetteki hiçbir önemli bilgiyi atma. Özel isimleri, sayıları ve eşya adlarını birebir koru. Mutlaka koru: oyuncunun karakteri ve şu anki durumu, önemli yan karakterler ve oyuncuyla ilişkileri, kimin neyi bildiği, verilen sözler, borçlar ve açık görevler, envanter ve kaynaklar, sırayla yaşanan kritik olaylar, bulunulan yer ve zaman. Kısa maddeler halinde, en fazla ${budget.sumWords} kelime. Sadece özeti yaz.` }],
-    });
+    }, { keyless: false });
     // Model bozuk ya da kısacık özet döndürdüyse eskisini koru; sonraki turda yeniden denenir
     if (acceptableSummary(text, save.summary)) {
       // Geri alma için önceki özeti sakla: silinen olaylar özette kalmasın
@@ -1329,6 +1408,17 @@ function openSettings(msg = '') {
       <p class="hint">Anahtarın sadece bu tarayıcıda saklanır, hiçbir sunucuya kaydedilmez.</p>
     </section>
     <section class="m-sec">
+      <h3>Kesintisiz oyun</h3>
+      <p class="hint">Bir servis dolunca ya da hata verince oyun kendiliğinden sıradakine geçer; dolan model bir süre atlanır, sonra geri gelir. Ne kadar çok ücretsiz anahtar eklersen o kadar az takılırsın. Hepsi ücretsiz, hiçbiri kredi kartı istemez.</p>
+      <ul class="backup-list">${Object.entries(PROVIDERS).filter(([k]) => k !== 'custom' && k !== p).map(([k, v]) => `<li>
+        <div class="bk-top"><span>${esc(v.label)}</span>${(settings.keys[k] || '').trim() ? '<b class="bk-ok">Hazır</b>' : `<a href="${v.keyUrl}" target="_blank" rel="noopener">Ücretsiz anahtar al</a>`}</div>
+        <input type="password" data-bkey="${k}" value="${esc(settings.keys[k] || '')}" autocomplete="off" spellcheck="false" placeholder="${esc(v.label)} anahtarı (yedek)">
+      </li>`).join('')}</ul>
+      <span class="label" style="margin-top:14px">Anahtarsız yedek</span>
+      <div class="seg" role="group" aria-label="Anahtarsız yedek">${[[true, 'Açık'], [false, 'Kapalı']].map(([k, l]) => `<button class="${(settings.backup !== false) === k ? 'on' : ''}" data-act="backup" data-v="${k ? 1 : 0}">${l}</button>`).join('')}</div>
+      <p class="hint">Hiç anahtar yoksa ya da hepsi doluysa anahtar istemeyen servisler devreye girer. Yavaştırlar ve Türkçeleri zayıftır, ama oyun durmaz.</p>
+    </section>
+    <section class="m-sec">
       <h3>Okuma</h3>
       <span class="label">Zemin</span>
       <div class="seg" role="group" aria-label="Zemin">${[['gece', 'Gece'], ['kagit', 'Kâğıt']].map(([k, l]) => `<button class="${(settings.theme || 'gece') === k ? 'on' : ''}" data-act="theme" data-v="${k}">${l}</button>`).join('')}</div>
@@ -1367,6 +1457,12 @@ function openSettings(msg = '') {
   }, 500));
   $('[data-s="model"]', m).addEventListener('change', e => { settings.models[settings.provider] = e.target.value; saveSettings(); });
   $('[data-s="temperature"]', m).addEventListener('input', e => { settings.temperature = +e.target.value; $('#temp-v').textContent = settings.temperature; saveSettings(); });
+  $$('[data-bkey]', m).forEach(inp => inp.addEventListener('input', debounce(e => {
+    const k = e.target.dataset.bkey;
+    settings.keys[k] = e.target.value.trim(); saveSettings();
+    const ok = e.target.parentElement.querySelector('.bk-top b, .bk-top a');
+    if (ok && settings.keys[k]) ok.outerHTML = '<b class="bk-ok">Hazır</b>';
+  }, 500)));
   $('[data-s="pollkey"]', m).addEventListener('input', debounce(e => { settings.keys.pollinations = e.target.value.trim(); saveSettings(); }, 400));
   const cb = $('[data-s="customBase"]', m);
   if (cb) cb.addEventListener('input', debounce(e => { settings.customBase = e.target.value.trim(); saveSettings(); }, 400));
@@ -1595,6 +1691,7 @@ document.addEventListener('click', e => {
     case 'rsize': settings.readSize = b.dataset.v; saveSettings(); applyPrefs(); $$('[data-act="rsize"]').forEach(x => x.classList.toggle('on', x === b)); break;
     case 'cat': homeState.cat = b.dataset.cat; $$('.chip').forEach(c => c.classList.toggle('on', c === b)); renderShelves(); break;
     case 'prov': settings.provider = b.dataset.p; saveSettings(); openSettings(); if (view === 'home') renderHome(); break;
+    case 'backup': settings.backup = b.dataset.v === '1'; saveSettings(); $$('[data-act="backup"]').forEach(x => x.classList.toggle('on', x === b)); break;
     case 'len': settings.length = b.dataset.l; saveSettings(); $$('[data-act="len"]').forEach(x => x.classList.toggle('on', x === b)); break;
     case 'toggle-key': { const inp = $('[data-s="key"]'); inp.type = inp.type === 'password' ? 'text' : 'password'; b.textContent = inp.type === 'password' ? 'Göster' : 'Gizle'; break; }
     case 'fetch-models': fetchModels(); break;
