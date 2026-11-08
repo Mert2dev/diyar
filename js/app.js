@@ -1,11 +1,11 @@
-import { SCENARIOS, CATEGORIES, SHELVES } from './scenarios.js?v=20261109b';
-import { coverSVG, THEMES, themeOf } from './covers.js?v=20261109b';
-import { SceneStage, SCENE_STYLES, parseScenes, parseCards, parseSceneTag, sceneTagRe, sceneProblem, composeScene, applyCards, castOf, withEdits, visualAnchor, keepsDistance } from './scenes.js?v=20261109b';
-import { PROVIDERS, KEYLESS, providerLabel, AIError, streamChat, complete, listModels, pickDefaultModel, rankModels } from './ai.js?v=20261109b';
+import { SCENARIOS, CATEGORIES, SHELVES } from './scenarios.js?v=20261109c';
+import { coverSVG, THEMES, themeOf } from './covers.js?v=20261109c';
+import { SceneStage, SCENE_STYLES, parseScenes, parseCards, parseSceneTag, sceneTagRe, sceneProblem, composeScene, applyCards, castOf, withEdits, visualAnchor, keepsDistance } from './scenes.js?v=20261109c';
+import { PROVIDERS, KEYLESS, providerLabel, AIError, streamChat, complete, listModels, pickDefaultModel, rankModels } from './ai.js?v=20261109c';
 import {
   approxTokens, cur, stripThink, TAG_CUT, stripScenes, stripCards, splitOutput, ledgerOf, ledgerText, contextBudget, fitHistory, compactOverflow,
   summaryPlan, recall, properNames, acceptableSummary, rewindSummary, qualityIssue, isLooping, removeRepeats, trimToSentence,
-} from './memory.js?v=20261109b';
+} from './memory.js?v=20261109c';
 
 /* ---------- yardımcılar ---------- */
 const app = document.getElementById('app');

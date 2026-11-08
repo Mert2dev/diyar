@@ -369,7 +369,7 @@ input[type=range] { width: 100%; accent-color: var(--amber); }
 }
 @media (max-width: 1099px) {
   .panel {
-    display: block; position: absolute; top: 0; right: 0; bottom: 0; width: min(360px, 92vw); z-index: 30;
+    display: block; position: fixed; top: 0; right: 0; bottom: 0; height: 100dvh; width: min(360px, 92vw); z-index: 60;
     transform: translateX(100%); transition: transform .22s ease; box-shadow: -18px 0 40px rgba(0,0,0,.35);
   }
   .play.panel-open .panel { transform: none; }
